@@ -8,4 +8,4 @@ scipy
 folium
 plotly
 joblib
-
+nbformat>=4.2.0
