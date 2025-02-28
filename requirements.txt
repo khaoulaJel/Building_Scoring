@@ -1,0 +1,11 @@
+pandas
+requests
+numpy
+seaborn
+matplotlib
+scikit-learn
+scipy
+folium
+plotly
+joblib
+
