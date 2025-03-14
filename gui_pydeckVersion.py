@@ -7,6 +7,7 @@ import geopandas as gpd
 import plotly.express as px
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
+import seaborn as sns
 from matplotlib.colors import LinearSegmentedColormap
 from joblib import Parallel, delayed
 from scipy.spatial.distance import mahalanobis
@@ -18,6 +19,7 @@ from pgmpy.inference import VariableElimination
 from sklearn.preprocessing import KBinsDiscretizer
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import confusion_matrix
+
 
 # --------------------------------------------------------------------------------
 # 1) CLASSIFICATION FUNCTIONS
@@ -241,47 +243,12 @@ def classify_weighted(df: pd.DataFrame) -> pd.DataFrame:
 # 2) STREAMLIT APP SETUP
 # --------------------------------------------------------------------------------
 st.set_page_config(page_title="Building Analytics Dashboard", layout="wide")
-st.title("Ben Guerir Building Analytics Dashboard")
+st.title("Building Analytics Dashboard")
 
 with st.sidebar:
-    st.header("Data and Filters")
-    
-    data_source = st.radio("Data Source", ["Sample Data", "Load OSM Data (Slower)"])
-
     @st.cache_data
-    def generate_sample_data(n=100):
-        data = {
-            'building_id': range(n),
-            'CO2_Usage': np.random.uniform(50, 500, n),
-            'Water_Usage': np.random.uniform(1000, 10000, n),
-            'Energy_Consumption': np.random.uniform(500, 5000, n),
-            'height': np.random.uniform(10, 100, n),
-            'latitude': np.random.uniform(32.22, 32.24, n),
-            'longitude': np.random.uniform(-7.96, -7.94, n)
-        }
-
-        polygons = []
-        for i in range(n):
-            center_lat = data['latitude'][i]
-            center_lon = data['longitude'][i]
-            size = np.random.uniform(0.0002, 0.0005)
-            points = [
-                [center_lon - size, center_lat - size],
-                [center_lon + size, center_lat - size],
-                [center_lon + size, center_lat + size],
-                [center_lon - size, center_lat + size],
-                [center_lon - size, center_lat - size]
-            ]
-            polygons.append([points])
-
-        data['polygon'] = polygons
-        df_ = pd.DataFrame(data)
-        return df_
-
-    @st.cache_data
-    def load_osm_data():
-        city_name = "Casablanca, Morocco"
-        with st.spinner("Fetching OSM data for Ben Guerir..."):
+    def load_osm_data(city_name):
+        with st.spinner("Fetching OSM data ..."):
             gdf = ox.features_from_place(city_name, tags={"building": True})
             gdf = gdf[gdf.geometry.type == "Polygon"]
 
@@ -308,12 +275,21 @@ with st.sidebar:
                 'polygon': gdf["polygon"]
             })
             return df_
-
+    st.header("Select a City")
+    
+    city_name = st.text_input("Enter a city in Morocco", "Casablanca")
+    
+    if st.button("Load Data"):
+        st.session_state["df"] = load_osm_data(city_name)
+        if st.session_state["df"].empty:
+            st.warning("No data available for the entered city. Try another city.")
+    
+    if "df" not in st.session_state or st.session_state["df"].empty:
+        st.info("Enter a city and click 'Load Data' to fetch building data.")
+        st.stop()
+        
     # Load data
-    if data_source == "Sample Data":
-        df = generate_sample_data()
-    else:
-        df = load_osm_data()
+    df = st.session_state["df"]
     
     # User picks classification
     classification_method = st.radio(
@@ -418,8 +394,7 @@ def get_color_mapping(values, metric):
         return filtered_df[metric].apply(map_to_color).tolist()
 
 with col1:
-    st.subheader("Building 3D Visualization")
-
+    st.subheader(f"Building Distribution in {city_name}")
     if not filtered_df.empty:
         # We'll keep the PyDeck 3D only for demonstration (often used with Euclidean).
         # You can remove or adapt it if you prefer a single approach for all.
@@ -532,7 +507,6 @@ with col1:
         
     elif classification_method == "Weighted Classification":
         # -- Weighted classification distribution plots --
-
         global_class_colors = {
             "A": "green",
             "B": "lightgreen",
