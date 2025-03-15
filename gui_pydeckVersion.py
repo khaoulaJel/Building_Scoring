@@ -396,30 +396,28 @@ def get_color_mapping(values, metric):
 with col1:
     st.subheader(f"Building Distribution in {city_name}")
     if not filtered_df.empty:
-        # We'll keep the PyDeck 3D only for demonstration (often used with Euclidean).
-        # You can remove or adapt it if you prefer a single approach for all.
         colors = get_color_mapping(filtered_df[color_by], color_by)
         cdf = filtered_df.copy()
         cdf["color"] = colors
 
+        # Define a ScatterplotLayer instead of a 3D PolygonLayer
         building_layer = pdk.Layer(
-            "PolygonLayer",
+            "ScatterplotLayer",
             cdf,
             id="buildings",
-            get_polygon="polygon",
-            get_elevation="height",
-            elevation_scale=1,
+            get_position=["longitude", "latitude"],  # Specify point coordinates
+            get_radius=30,  # Adjust size of points
             get_fill_color="color",
-            extruded=True,
             pickable=True,
-            auto_highlight=True,
         )
+
         view_state = pdk.ViewState(
             latitude=filtered_df["latitude"].mean(),
             longitude=filtered_df["longitude"].mean(),
             zoom=14,
-            pitch=45,
+            pitch=0,  # Ensure top-down view for better point visualization
         )
+
         deck = pdk.Deck(
             layers=[building_layer],
             initial_view_state=view_state,
@@ -437,6 +435,7 @@ with col1:
         st.pydeck_chart(deck)
     else:
         st.write("No buildings match the current filters.")
+
         
 # --------------------------------------------------------
         # 3D Classification Visualization (CHANGES per method)

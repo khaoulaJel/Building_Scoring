@@ -9,3 +9,10 @@ folium
 plotly
 joblib
 nbformat>=4.2.0
+streamlit
+pydeck
+osmnx
+geopandas
+pgmpy
+#pip install -r requirements.txt
+
