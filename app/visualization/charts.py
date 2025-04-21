@@ -17,7 +17,7 @@ def display_relationship_plot(filtered_df, color_by):
     )
     y_metric = st.selectbox(
         "Y-Axis",
-        ["Energy_Consumption", "CO2_Usage", "Water_Usage", "height"],
+        ["Energy_Consumption", "CO2_Usage", "Water_Usage"],
         key="y_axis"
     )
     
@@ -35,7 +35,7 @@ def display_relationship_plot(filtered_df, color_by):
         color_continuous_scale="Viridis" if color_by != "class_label" else None,
         hover_data=[
             "building_id", "class_label", "CO2_Usage", "Water_Usage",
-            "Energy_Consumption", "height"
+            "Energy_Consumption"
         ]
     )
     
