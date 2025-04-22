@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
-
 def classify_weighted(df: pd.DataFrame, features: list) -> pd.DataFrame:
     """
     Weighted classification of any feature list.
