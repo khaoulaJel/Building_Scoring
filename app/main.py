@@ -4,11 +4,14 @@ import numpy as np
 from datetime import datetime
 pd.set_option("styler.render.max_elements", 500_000)  
 
+from models.mahalanobis import classify_mahalanobis
+from scripts.validate_data import add_classifications,fetch_ademe_data, validate_and_preprocess_dataset
 from visualization.map import display_map
 from visualization.charts import display_relationship_plot, display_distribution_plot
 from visualization.model_specific import display_model_visualization
 from utils.metrics import display_metrics_overview
 from utils.export import add_export_section, add_benchmark_comparison
+from pathlib import Path
 
 # Set page config with icon and expanded layout
 st.set_page_config(
@@ -218,35 +221,104 @@ if 'comparison_buildings' not in st.session_state:
 with st.sidebar:
     st.title("Dashboard Controls")
     
-    # City selection with flags
-    st.header("📍 Location")
-    st.markdown("**Selected City:** Lyon")
-    # Load from CSV cache
-    with st.spinner("Loading Lyon data..."):
-        # Load pre-computed data with classifications already included
-        df = pd.read_csv("data/reduced_lyon_buildings.csv")
-        selected_city = "Lyon"
-    # Optional: Choose scoring logic (Total vs Intensity)
+    # Dataset selection
+    st.header("📊 Dataset Selection")
+    dataset_option = st.selectbox(
+        "Choose Dataset",
+        ["Default (Lyon)", "Gordes", "Upload Custom Dataset"],
+        key="dataset_option"
+    )
+    
+    uploaded_file = None
+    if dataset_option == "Upload Custom Dataset":
+        uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
+    
+    # Load and validate dataset
+    if dataset_option == "Default (Lyon)":
+        with st.spinner("Loading Lyon data..."):
+            df = pd.read_csv("data/reduced_lyon_buildings.csv")
+            selected_city = "Lyon"
+    elif dataset_option == "Gordes":
+        with st.spinner("Loading Gordes data..."):
+            try:
+                df = pd.read_csv("data/reduced_gordes_buildings.csv")
+                selected_city = "Gordes"
+            except FileNotFoundError:
+                st.error("Gordes dataset file 'data/reduced_gordes_buildings.csv' not found.")
+                df = pd.read_csv("data/reduced_lyon_buildings.csv")
+                selected_city = "Lyon"
+                st.warning("Reverted to default Lyon dataset")
+                st.write(f"Fallback dataset: {selected_city}")  # Debug
+    else:  # Upload Custom Dataset
+        if uploaded_file is not None:
+            with st.spinner("Loading uploaded dataset..."):
+                try:
+                    df = pd.read_csv(uploaded_file)
+                    selected_city = "Custom Dataset"
+                except Exception as e:
+                    st.error(f"Error loading CSV file: {str(e)}")
+                    df = pd.read_csv("data/reduced_lyon_buildings.csv")
+                    selected_city = "Lyon"
+                    st.warning("Reverted to default Lyon dataset")
+                    st.write(f"Fallback dataset: {selected_city}")  # Debug
+        else:
+            st.info("Please upload a CSV file to proceed.")
+            df = pd.read_csv("data/reduced_lyon_buildings.csv")
+            selected_city = "Lyon"
+            st.write(f"Using default dataset: {selected_city}")  # Debug
+            
+    # Scoring basis
     st.subheader("Scoring Basis")
     scoring_basis = st.radio("Choose scoring basis", ["Total (kWh)", "Per m² (kWh/m²/year)"])
-
-    # Replace metrics depending on scoring logic
+    
+    # Validate and preprocess dataset
+    df = validate_and_preprocess_dataset(df, scoring_basis)
+    if df is None:
+        df = pd.read_csv("data/reduced_lyon_buildings.csv")
+        selected_city = "Lyon"
+        st.warning("Invalid dataset. Reverted to default Lyon dataset")
+        df = validate_and_preprocess_dataset(df, scoring_basis)
+    
+    # Replace metrics for intensity-based scoring
     if scoring_basis == "Per m² (kWh/m²/year)":
-        df["Energy_Consumption"] = df["Energy_Intensity"]
-        df["CO2_Usage"] = df["CO2_Intensity"]
-
-    # Cache it in session
+        if "Energy_Intensity" in df.columns and "CO2_Intensity" in df.columns:
+            df["Energy_Consumption"] = df["Energy_Intensity"]
+            df["CO2_Usage"] = df["CO2_Intensity"]
+    
+    # Feature selection for classification
+    st.subheader("Classification Features")
+    available_features = [
+        "Energy_Consumption", "CO2_Usage", "Water_Usage",
+        "Energy_Intensity", "CO2_Intensity"
+    ]
+    available_features = [f for f in available_features if f in df.columns]
+    selected_features = st.multiselect(
+        "Select 3 Features",
+        options=available_features,
+        default=["Energy_Consumption", "CO2_Usage", "Water_Usage"],
+        max_selections=3,
+        key="classification_features"
+    )
+    
+    if len(selected_features) != 3:
+        st.error("Please select exactly 3 features for classification.")
+        st.stop()
+    
+    # Add classifications if missing
+    df = add_classifications(df)
+    
+    # Cache in session state
     st.session_state["df"] = df
     st.session_state["city"] = selected_city
-
+    
     # Classification method selection
-    st.header(" Analysis Method")
+    st.header("Analysis Method")
     classification_methods = {
-        "Euclidean Distance": " Euclidean Distance",
-        "Mahalanobis Distance": " Mahalanobis Distance",
-        "PCA Classification": " PCA Classification",
-        "Weighted Classification": " Weighted Classification",
-        "Bayesian Classification": " Bayesian Classification"
+        "Euclidean Distance": "Euclidean Distance",
+        "Mahalanobis Distance": "Mahalanobis Distance",
+        "PCA Classification": "PCA Classification",
+        "Weighted Classification": "Weighted Classification",
+        "Bayesian Classification": "Bayesian Classification"
     }
     
     classification_method = st.radio(
@@ -255,9 +327,8 @@ with st.sidebar:
         format_func=lambda x: classification_methods[x]
     )
     
-    # Use the pre-computed classifications
+    # Apply selected classification
     with st.spinner(f"Applying {classification_method}..."):
-        # Map the classification method to its corresponding column
         class_column_mapping = {
             "Euclidean Distance": "class_euclidean",
             "Mahalanobis Distance": "class_mahalanobis",
@@ -265,16 +336,78 @@ with st.sidebar:
             "Weighted Classification": "class_weighted",
             "Bayesian Classification": "class_bayesian"
         }
-        
-        # Set the class_label based on the selected method
         selected_class_column = class_column_mapping[classification_method]
+        
+        # Apply the selected classification method
+        if classification_method == "Euclidean Distance":
+            from models.euclidean import classify_euclidean
+            df = classify_euclidean(df, features=selected_features)
+        elif classification_method == "Mahalanobis Distance":
+            from models.mahalanobis import classify_mahalanobis
+            df = classify_mahalanobis(df, features=selected_features, return_distance=True)
+        elif classification_method == "PCA Classification":
+            from models.pca import classify_pca
+            df = classify_pca(df, features=selected_features)
+        elif classification_method == "Weighted Classification":
+            from models.weighted import classify_weighted
+            df = classify_weighted(df, features=selected_features)
+        elif classification_method == "Bayesian Classification":
+            from models.bayesian import classify_bayesian
+            df = classify_bayesian(df, features=selected_features)
+        
+        # Assign class_label from the mapped column
+        if selected_class_column in df.columns:
+            df["class_label"] = df[selected_class_column]
+        else:
+            st.error(f"Column '{selected_class_column}' not found after classification. Check the classification function.")
+            st.stop()
+        
+        # Cache updated DataFrame
+        st.session_state["df"] = df
+        
+with st.spinner(f"Applying {classification_method}..."):
+    class_column_mapping = {
+        "Euclidean Distance": "class_euclidean",
+        "Mahalanobis Distance": "class_mahalanobis",
+        "PCA Classification": "class_pca",
+        "Weighted Classification": "class_weighted",
+        "Bayesian Classification": "class_bayesian"
+    }
+    selected_class_column = class_column_mapping[classification_method]
+    
+    # Apply the selected classification method
+    features = ["Energy_Consumption", "CO2_Usage", "Water_Usage"]
+    if classification_method == "Euclidean Distance":
+        from models.euclidean import classify_euclidean
+        df = classify_euclidean(df, features=features)
+    elif classification_method == "Mahalanobis Distance":
+        from models.mahalanobis import classify_mahalanobis
+        df = classify_mahalanobis(df, features=features, return_distance=True)
+    elif classification_method == "PCA Classification":
+        from models.pca import classify_pca
+        df = classify_pca(df, features=features)
+    elif classification_method == "Weighted Classification":
+        from models.weighted import classify_weighted
+        df = classify_weighted(df, features=features)
+    elif classification_method == "Bayesian Classification":
+        from models.bayesian import classify_bayesian
+        df = classify_bayesian(df, features=features)
+    
+    # Assign class_label from the mapped column
+    if selected_class_column in df.columns:
         df["class_label"] = df[selected_class_column]
+    else:
+        st.error(f"Column '{selected_class_column}' not found after classification. Check the classification function.")
+        st.stop()
+    
+    # Cache updated DataFrame
+    st.session_state["df"] = df
+        
 
 # Check if empty
 if df.empty:
-    st.error("No data available for this city. Please select another city or check your data source.")
+    st.error("No data available. Please check your dataset.")
     st.stop()
-
 # Advanced filters in an expander
 with st.expander("🔍 Advanced Filters", expanded=False):
     col1, col2 = st.columns(2)
@@ -596,8 +729,10 @@ with tab4:
                 )
     
     # Benchmarks section
-    st.markdown("### Benchmark Comparison")
+    
     add_benchmark_comparison(filtered_df)
+
+
 
 # Footer
 st.markdown("""

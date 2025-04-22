@@ -5,100 +5,86 @@ from pgmpy.models import BayesianNetwork
 from pgmpy.estimators import MaximumLikelihoodEstimator
 from pgmpy.inference import VariableElimination
 
-def classify_bayesian(df: pd.DataFrame) -> pd.DataFrame:
+def classify_bayesian(df: pd.DataFrame, features: list) -> pd.DataFrame:
     """
     Bayesian Network-based classification of buildings into A-F.
     Produces df['class_label'] with A-F classes, plus 
     df['Bayesian_Certainty'] for the probability of that class.
     
     Args:
-        df (pd.DataFrame): Input dataframe with Energy_Consumption, CO2_Usage, Water_Usage columns
+        df (pd.DataFrame): Input dataframe
+        features (list): List of 3 columns (e.g. log1p_CO2_Usage, Water_Usage, log1p_Energy_Consumption)
     
     Returns:
         pd.DataFrame: Modified dataframe with classification added
     """
-    # Rename df to real_data internally, for clarity
+    assert len(features) == 3, "You must provide exactly 3 features"
+
     real_data = df.copy()
+    
+    # Optimal reference point (min values per feature)
+    optimal_point = real_data[features].min().values
 
-    # 1) Optimal reference point (minimum CO₂, Water, Energy)
-    optimal_point = np.array([
-        real_data["CO2_Usage"].min(),
-        real_data["Water_Usage"].min(),
-        real_data["Energy_Consumption"].min()
-    ])
-
-    # 2) Discretize with KBinsDiscretizer
+    # 1 ▸ Discretize features
     n_bins = 5
     discretizer = KBinsDiscretizer(n_bins=n_bins, encode='ordinal', strategy='quantile')
-    features = real_data[["CO2_Usage", "Water_Usage", "Energy_Consumption"]].values
-    discretized_features = discretizer.fit_transform(features)
-    discretized_data = pd.DataFrame(
-        discretized_features,
-        columns=["CO2_Level", "Water_Level", "Energy_Level"]
-    )
+    raw_values = real_data[features].values
+    discretized_features = discretizer.fit_transform(raw_values)
+    
+    # Build column names dynamically
+    level_names = [f"{feat}_Level" for feat in ["Feature1", "Feature2", "Feature3"]]
+    discretized_data = pd.DataFrame(discretized_features, columns=level_names)
 
-    # 3) Create an initial class assignment (Euclidean from optimal)
+    # 2 ▸ Initial class via Euclidean distance to optimal
     scaler = MinMaxScaler()
-    scaled_features = scaler.fit_transform(features)
+    scaled_values = scaler.fit_transform(raw_values)
     scaled_optimal = scaler.transform([optimal_point])[0]
-    distances = np.sqrt(np.sum((scaled_features - scaled_optimal)**2, axis=1))
+    distances = np.linalg.norm(scaled_values - scaled_optimal, axis=1)
 
-    num_classes = 6  # A-F
+    num_classes = 6
     class_labels = ['A', 'B', 'C', 'D', 'E', 'F']
     bins = np.linspace(distances.min(), distances.max(), num_classes + 1)
-    initial_classes = np.digitize(distances, bins)
-    initial_classes = np.clip(initial_classes, 1, num_classes) - 1  # 0-based
-    discretized_data["Class"] = [class_labels[i] for i in initial_classes]
+    digitized = np.digitize(distances, bins)
+    digitized = np.clip(digitized, 1, num_classes) - 1  # convert to 0-based
+    discretized_data["Class"] = [class_labels[i] for i in digitized]
 
-    # 4) Define a Bayesian Network structure
+    # 3 ▸ Define Bayesian Network structure
     model = BayesianNetwork([
-        ('CO2_Level', 'Class'),
-        ('Water_Level', 'Class'),
-        ('Energy_Level', 'Class'),
-        ('CO2_Level', 'Energy_Level'),
-        ('Water_Level', 'Energy_Level')
+        (level_names[0], "Class"),
+        (level_names[1], "Class"),
+        (level_names[2], "Class"),
+        (level_names[0], level_names[2]),
+        (level_names[1], level_names[2])
     ])
 
-    # 5) Fit the BN with MaximumLikelihoodEstimator
     model.fit(discretized_data, estimator=MaximumLikelihoodEstimator)
-
-    # 6) Infer class probabilities for each building
     inference = VariableElimination(model)
 
-    def get_class_probabilities(co2_level, water_level, energy_level):
+    def get_class_probabilities(l1, l2, l3):
         evidence = {
-            'CO2_Level': co2_level,
-            'Water_Level': water_level,
-            'Energy_Level': energy_level
+            level_names[0]: l1,
+            level_names[1]: l2,
+            level_names[2]: l3
         }
         return inference.query(variables=['Class'], evidence=evidence)
 
-    # Create arrays to hold results
     bayesian_classes = []
     certainty_scores = []
 
     for row in discretized_features:
-        co2_level, water_level, energy_level = row
-        prob_dist = get_class_probabilities(co2_level, water_level, energy_level)
-        
-        # Extract class probabilities
-        probs = {}
-        for j, state in enumerate(prob_dist.state_names['Class']):
-            probs[state] = prob_dist.values[j]
-        
-        # Pick the most likely class
+        prob_dist = get_class_probabilities(*row)
+
+        probs = {
+            state: prob_dist.values[j]
+            for j, state in enumerate(prob_dist.state_names['Class'])
+        }
+
         best_class = max(probs, key=probs.get)
         bayesian_classes.append(best_class)
-
-        # Certainty = probability of that top class
         certainty_scores.append(probs[best_class])
 
-    # Attach results
-    real_data['Bayesian_Class'] = bayesian_classes
-    real_data['Bayesian_Certainty'] = certainty_scores
-
-    # For uniformity with other classification methods,
-    # we store final classification in 'class_label'
-    real_data['class_label'] = real_data['Bayesian_Class']
+    real_data["class_bayesian"] = bayesian_classes
+    real_data["Bayesian_Certainty"] = certainty_scores
+    real_data["class_label"] = real_data["class_bayesian"]
 
     return real_data
