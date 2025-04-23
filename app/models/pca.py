@@ -10,7 +10,7 @@ def classify_pca(df: pd.DataFrame, features: list) -> pd.DataFrame:
     
     Args:
         df (pd.DataFrame): Input dataframe
-        features (list): List of 3 features (e.g. log1p_CO2_Usage, Water_Usage, log1p_Energy_Consumption)
+        features (list): List of 3 features (e.g., log1p_CO2_Usage, Water_Usage, log1p_Energy_Consumption)
     
     Returns:
         pd.DataFrame: Modified dataframe with classification results
@@ -18,6 +18,10 @@ def classify_pca(df: pd.DataFrame, features: list) -> pd.DataFrame:
     assert len(features) == 3, "You must provide exactly 3 features."
 
     df = df.copy()
+    
+    # Handle NaN values
+    df[features] = df[features].fillna(df[features].mean())
+    
     scaler = MinMaxScaler()
     norm_cols = [f"{col}_norm" for col in features]
     df[norm_cols] = scaler.fit_transform(df[features])
@@ -40,7 +44,10 @@ def classify_pca(df: pd.DataFrame, features: list) -> pd.DataFrame:
         elif score <= percentiles[0.9]: return "E"
         else: return "F"
 
-    df["PCA_Class"] = df["PC1"].apply(classify)
-    df["class_label"] = df["PCA_Class"]
+    df["class_pca"] = df["PC1"].apply(classify)
+    df["class_label"] = df["class_pca"]
+
+    # Clean up temporary columns
+    df = df.drop(columns=norm_cols + ["PC1"], errors='ignore')
 
     return df

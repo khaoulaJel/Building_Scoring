@@ -6,6 +6,7 @@ from data.data_loader import load_osm_data
 from models.euclidean import classify_euclidean
 from models.mahalanobis import classify_mahalanobis
 from models.pca import classify_pca
+
 from models.weighted import classify_weighted
 from models.bayesian import classify_bayesian
 

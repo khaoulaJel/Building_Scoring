@@ -11,16 +11,20 @@ def classify_weighted(df: pd.DataFrame, features: list) -> pd.DataFrame:
         features (list): List of 3 features to use (e.g., log1p_...)
 
     Returns:
-        pd.DataFrame: With 'class_label' column added
+        pd.DataFrame: With 'class_label' and 'class_weighted' columns added
     """
-    df = df.copy()
     assert len(features) == 3, "Expected exactly 3 features"
+
+    df = df.copy()
+    
+    # Handle NaN values
+    df[features] = df[features].fillna(df[features].mean())
 
     scaler = MinMaxScaler()
     norm_cols = [f"{col}_norm" for col in features]
     df[norm_cols] = scaler.fit_transform(df[features])
 
-    # Optional: you can define weights based on feature names if needed
+    # Define weights
     weights = np.array([0.2, 0.3, 0.5])
     df["Global_Score"] = np.sum(df[norm_cols] * weights, axis=1)
 
@@ -34,5 +38,10 @@ def classify_weighted(df: pd.DataFrame, features: list) -> pd.DataFrame:
         elif score <= percentiles[0.9]: return "E"
         else: return "F"
 
-    df["class_label"] = df["Global_Score"].apply(classify_score)
+    df["class_weighted"] = df["Global_Score"].apply(classify_score)
+    df["class_label"] = df["class_weighted"]
+
+    # Clean up temporary columns
+    df = df.drop(columns=norm_cols + ["Global_Score"], errors='ignore')
+
     return df

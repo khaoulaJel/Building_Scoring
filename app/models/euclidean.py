@@ -31,5 +31,8 @@ def classify_euclidean(df: pd.DataFrame, features: list) -> pd.DataFrame:
 
     class_labels = ['A', 'B', 'C', 'D', 'E', 'F']
     df['class_label'] = df['class'].apply(lambda x: class_labels[min(x, len(class_labels)-1)])
-
+    df['class_euclidean'] = df['class_label']
+    
+    
+    df = df.drop(columns=norm_cols + ['distance', 'class'], errors='ignore')
     return df

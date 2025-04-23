@@ -83,8 +83,8 @@ def classify_bayesian(df: pd.DataFrame, features: list) -> pd.DataFrame:
         bayesian_classes.append(best_class)
         certainty_scores.append(probs[best_class])
 
-    real_data["Bayesian_Class"] = bayesian_classes
+    real_data["class_bayesian"] = bayesian_classes
     real_data["Bayesian_Certainty"] = certainty_scores
-    real_data["class_label"] = real_data["Bayesian_Class"]
+    real_data["class_label"] = real_data["class_bayesian"]
 
     return real_data
