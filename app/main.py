@@ -5,7 +5,7 @@ from datetime import datetime
 pd.set_option("styler.render.max_elements", 500_000)  
 
 from models.mahalanobis import classify_mahalanobis
-from scripts.validate_data import add_classifications,fetch_ademe_data, validate_and_preprocess_dataset
+from scripts.validate_data import add_classifications, validate_and_preprocess_dataset
 from visualization.map import display_map
 from visualization.charts import display_relationship_plot, display_distribution_plot
 from visualization.model_specific import display_model_visualization
