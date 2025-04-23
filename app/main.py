@@ -13,13 +13,12 @@ from utils.metrics import display_metrics_overview
 from utils.export import add_export_section, add_benchmark_comparison
 from pathlib import Path
 
-# at the top, alongside your other utils imports
 from utils.building_selection import (
     setup_building_selection,
     display_clickable_map,
     display_building_classifications
 )
- 
+
 
 # Set page config with icon and expanded layout
 st.set_page_config(
