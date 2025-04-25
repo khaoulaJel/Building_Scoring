@@ -1,60 +1,101 @@
-# ──────────────────────────────────────────────────────────────
-#  scripts/precompute_city_data.py
-# ──────────────────────────────────────────────────────────────
+#!/usr/bin/env python3
+"""
+Pre-compute building dataset for a single city.
 
+This script:
+ 1. Reads a raw DPE CSV
+ 2. Renames key columns and adds derived metrics (Water_Usage, log-transforms)
+ 3. Runs classification algorithms (Euclidean, Mahalanobis, PCA, Weighted, Bayesian)
+ 4. Saves the enriched data to Parquet and overwrites the original CSV (with backup)
+
+Usage:
+  python precompute_city_data.py \
+    --city Lyon \
+    --input raw/Lyon_dataset.csv \
+    --output output/Lyon.parquet \
+    --features log1p_CO2_Usage Water_Usage log1p_Energy_Consumption \
+    --weights 0.5 0.2 0.3
+"""
 import argparse
 import pathlib
 import pandas as pd
 import numpy as np
-import os
+import shutil
 
 # ──────────────────────────────────────────────────────────────
-# 1 ▸ Parse CLI
+# 1 ▸ Parse CLI arguments
 # ──────────────────────────────────────────────────────────────
-parser = argparse.ArgumentParser(description="Pre‑compute building dataset for one city.")
-parser.add_argument("--city",   required=True)
-parser.add_argument("--input",  required=True, help="raw CSV path")
-parser.add_argument("--output", required=True, help=".parquet to write")
+parser = argparse.ArgumentParser(
+    description="Pre-compute building dataset for one city."
+)
+parser.add_argument("--city", required=True, help="City name (for logging)")
+parser.add_argument(
+    "--input", required=True, help="Path to raw CSV file (will be overwritten)"
+)
+parser.add_argument(
+    "--output", required=True, help="Path to write Parquet file"
+)
+parser.add_argument(
+    "--features", nargs='+', required=True,
+    help="List of feature columns to use for classification"
+)
+parser.add_argument(
+    "--weights", nargs='+', type=float, default=None,
+    help=("Optional weights for weighted classifier; must match length of --features. "
+          "If omitted, equal weights are used.")
+)
 args = parser.parse_args()
 
-city = args.city.lower()
-
-RAW  = pathlib.Path(args.input).expanduser()
+city = args.city
+RAW = pathlib.Path(args.input).expanduser()
 DEST = pathlib.Path(args.output).expanduser()
 DEST.parent.mkdir(parents=True, exist_ok=True)
 
 print(f"🔍 Reading file: {RAW}")
 
 # ──────────────────────────────────────────────────────────────
-# 2 ▸ Load & handle CSV directly
+# 2 ▸ Backup original CSV
 # ──────────────────────────────────────────────────────────────
-df = pd.read_csv(RAW)
+backup_path = RAW.with_suffix(RAW.suffix + ".orig_backup")
+if not backup_path.exists():
+    shutil.copy2(RAW, backup_path)
+    print(f"📦 Backed up original CSV to {backup_path}")
 
+# ──────────────────────────────────────────────────────────────
+# 3 ▸ Load raw data
+# ──────────────────────────────────────────────────────────────
+df = pd.read_csv(RAW, dtype=str)
 print("🔍 Original columns:", df.columns.tolist())
-print("🔍 First few rows:")
-print(df.head(2))
 
-# Rename columns if needed
+# Rename raw DPE columns to standardized names
 if "building_id" not in df.columns and "numero_dpe" in df.columns:
     df = df.rename(columns={
-        "numero_dpe"                    : "building_id",
-        "conso_5 usages_ef"             : "Energy_Consumption",
-        "emission_ges_5_usages"         : "CO2_Usage",
-        "conso_5 usages_par_m2_ef"      : "Energy_Intensity",
-        "emission_ges_5_usages par_m2"  : "CO2_Intensity"
+        "numero_dpe": "building_id",
+        "conso_5 usages_ef": "Energy_Consumption",
+        "emission_ges_5_usages": "CO2_Usage",
+        "conso_5 usages_par_m2_ef": "Energy_Intensity",
+        "emission_ges_5_usages par_m2": "CO2_Intensity",
     })
 
-# Add Water_Usage if missing
-if "Water_Usage" not in df.columns and "Energy_Consumption" in df.columns:
-    df["Water_Usage"] = df["Energy_Consumption"] * 0.30
+# Ensure id is string
+df['building_id'] = df['building_id'].astype(str)
 
-# Add log-transformed features
-log_targets = ["Energy_Consumption", "CO2_Usage", "Energy_Intensity", "CO2_Intensity"]
+# Add Water_Usage if missing
+if 'Water_Usage' not in df.columns and 'Energy_Consumption' in df.columns:
+    df['Water_Usage'] = df['Energy_Consumption'].astype(float) * 0.30
+
+# Convert numeric columns to float for transforms
+numeric_cols = ['Energy_Consumption','CO2_Usage','Energy_Intensity','CO2_Intensity','Water_Usage']
+for col in numeric_cols:
+    df[col] = pd.to_numeric(df[col], errors='coerce')
+
+# Add log1p-transformed features
+log_targets = ['Energy_Consumption','CO2_Usage','Energy_Intensity','CO2_Intensity']
 for col in log_targets:
-    df[f"log1p_{col}"] = np.log1p(df[col])
+    df[f'log1p_{col}'] = np.log1p(df[col].fillna(0))
 
 # ──────────────────────────────────────────────────────────────
-# 3 ▸ Run every ML / distance classifier OFF‑LINE
+# 4 ▸ Run classification algorithms
 # ──────────────────────────────────────────────────────────────
 from app.models.euclidean   import classify_euclidean
 from app.models.mahalanobis import classify_mahalanobis
@@ -62,40 +103,61 @@ from app.models.pca         import classify_pca
 from app.models.weighted    import classify_weighted
 from app.models.bayesian    import classify_bayesian
 
-print("🔍 Running classification algorithms...")
+features = args.features
+weights = args.weights
+if weights is not None and len(weights) != len(features):
+    raise ValueError(
+        f"--weights length {len(weights)} does not match --features length {len(features)}"
+    )
+# Default equal weights if none provided
+if weights is None:
+    weights = [1.0] * len(features)
 
-# ✅ Define the features to use
-selected_features = ["log1p_CO2_Usage", "Water_Usage", "log1p_Energy_Consumption"]
+print("🔍 Classifying using features:", features)
 
-# Run classifiers
-df = classify_mahalanobis(df, selected_features, return_distance=True)
-df["class_mahalanobis"] = df["class_label"]
+# Mahalanobis
+df_mah = classify_mahalanobis(
+    df, features=features, return_distance=True
+)
+df['class_mahalanobis']     = df_mah['class_label']
+df['Mahalanobis_Distance']  = df_mah['Mahalanobis_Distance']
 
-df["class_euclidean"]   = classify_euclidean(df, selected_features)["class_label"]
-df["class_pca"]         = classify_pca(df, selected_features)["class_label"]
-df["class_weighted"]    = classify_weighted(df, selected_features)["class_label"]
-df["class_bayesian"]    = classify_bayesian(df, selected_features)["class_label"]
+# Euclidean
+df['class_euclidean'] = classify_euclidean(
+    df, features=features
+)['class_label']
+
+# PCA
+df['class_pca'] = classify_pca(
+    df, features=features
+)['class_label']
+
+# Weighted
+df['class_weighted'] = classify_weighted(
+    df, features=features, weights=weights
+)['class_label']
+
+# Bayesian
+df['class_bayesian'] = classify_bayesian(
+    df, features=features
+)['class_label']
+
+# Cleanup any stray column_label
+if 'class_label' in df.columns:
+    df.drop(columns=['class_label'], inplace=True)
 
 print("✅ Classification complete!")
 print("🧾 Final columns:", df.columns.tolist())
-print("🔎 Preview of classified dataframe:")
-print(df.head(3))
 
 # ──────────────────────────────────────────────────────────────
-# 4 ▸ Save both parquet and updated CSV
+# 5 ▸ Save outputs
 # ──────────────────────────────────────────────────────────────
+# Parquet
+DEST = DEST.with_suffix('.parquet')
 df.to_parquet(DEST, index=False)
-print(f"💾 {city.title()}: saved {len(df):,} rows → {DEST}")
+print(f"💾 {city.title()}: saved {len(df):,} rows to {DEST}")
 
-# Overwrite the input CSV with enriched data
-output_csv_path = RAW
-print(f"📝 Overwriting CSV with enriched data: {output_csv_path}")
-df.to_csv(output_csv_path, index=False)
-print(f"✅ Updated: {output_csv_path}")
-
-# Optional: create a backup of this file
-backup_path = output_csv_path.with_suffix(output_csv_path.suffix + ".backup")
-if not backup_path.exists():
-    import shutil
-    shutil.copy2(output_csv_path, backup_path)
-    print(f"📦 Created backup of original file: {backup_path}")
+# Overwrite original CSV with enriched data
+print(f"📝 Overwriting original CSV: {RAW}")
+df.to_csv(RAW, index=False)
+print("✅ CSV updated.")

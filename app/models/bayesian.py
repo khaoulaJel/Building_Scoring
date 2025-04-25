@@ -5,86 +5,86 @@ from pgmpy.models import BayesianNetwork
 from pgmpy.estimators import MaximumLikelihoodEstimator
 from pgmpy.inference import VariableElimination
 
-def classify_bayesian(df: pd.DataFrame, features: list) -> pd.DataFrame:
+def classify_bayesian(
+    df: pd.DataFrame,
+    features: list,
+    n_bins: int = 5,
+    class_labels: list = ['A','B','C','D','E','F']
+) -> pd.DataFrame:
     """
-    Bayesian Network-based classification of buildings into A-F.
-    Produces df['class_label'] with A-F classes, plus 
-    df['Bayesian_Certainty'] for the probability of that class.
-    
+    Bayesian Network–based classification of buildings into classes.
+    Works with any number of features.
+
     Args:
-        df (pd.DataFrame): Input dataframe
-        features (list): List of 3 columns (e.g. log1p_CO2_Usage, Water_Usage, log1p_Energy_Consumption)
-    
+        df (pd.DataFrame): Input dataframe.
+        features (list of str): Column names to use as features.
+        n_bins (int): Number of quantile bins for discretization.
+        class_labels (list): Ordered labels for classes.
+
     Returns:
-        pd.DataFrame: Modified dataframe with classification added
+        pd.DataFrame: df with added columns:
+          - 'class_label' : MAP class from the Bayesian network
+          - 'Bayesian_Certainty' : P(class_label | evidence)
     """
-    assert len(features) == 3, "You must provide exactly 3 features"
-
     real_data = df.copy()
-    
-    # Optimal reference point (min values per feature)
-    optimal_point = real_data[features].min().values
+    X = real_data[features].values
+    n_features = len(features)
+    n_classes = len(class_labels)
 
-    # 1 ▸ Discretize features
-    n_bins = 5
-    discretizer = KBinsDiscretizer(n_bins=n_bins, encode='ordinal', strategy='quantile')
-    raw_values = real_data[features].values
-    discretized_features = discretizer.fit_transform(raw_values)
-    
-    # Build column names dynamically
-    level_names = [f"{feat}_Level" for feat in ["Feature1", "Feature2", "Feature3"]]
-    discretized_data = pd.DataFrame(discretized_features, columns=level_names)
+    # 0 ▸ Compute the “optimal” reference point
+    optimal_point = X.min(axis=0)
 
-    # 2 ▸ Initial class via Euclidean distance to optimal
+    # 1 ▸ Discretize each feature into n_bins quantiles
+    discretizer = KBinsDiscretizer(
+        n_bins=n_bins,
+        encode='ordinal',
+        strategy='quantile'
+    )
+    X_disc = discretizer.fit_transform(X)
+    # level_names: e.g. ['CO2_Usage_Level', 'Water_Usage_Level', ...]
+    level_names = [f"{feat}_Level" for feat in features]
+    disc_df = pd.DataFrame(X_disc, columns=level_names, index=real_data.index)
+
+    # 2 ▸ Initial class assignment by Euclidean distance to optimal
     scaler = MinMaxScaler()
-    scaled_values = scaler.fit_transform(raw_values)
-    scaled_optimal = scaler.transform([optimal_point])[0]
-    distances = np.linalg.norm(scaled_values - scaled_optimal, axis=1)
+    X_scaled = scaler.fit_transform(X)
+    opt_scaled = scaler.transform([optimal_point])[0]
+    distances = np.linalg.norm(X_scaled - opt_scaled, axis=1)
 
-    num_classes = 6
-    class_labels = ['A', 'B', 'C', 'D', 'E', 'F']
-    bins = np.linspace(distances.min(), distances.max(), num_classes + 1)
-    digitized = np.digitize(distances, bins)
-    digitized = np.clip(digitized, 1, num_classes) - 1  # convert to 0-based
-    discretized_data["Class"] = [class_labels[i] for i in digitized]
+    # Digitize distances into equal-width bins for class labels
+    bins = np.linspace(distances.min(), distances.max(), n_classes + 1)
+    idx = np.digitize(distances, bins, right=False) - 1
+    idx = np.clip(idx, 0, n_classes-1)
+    disc_df['Class'] = [class_labels[i] for i in idx]
 
-    # 3 ▸ Define Bayesian Network structure
-    model = BayesianNetwork([
-        (level_names[0], "Class"),
-        (level_names[1], "Class"),
-        (level_names[2], "Class"),
-        (level_names[0], level_names[2]),
-        (level_names[1], level_names[2])
-    ])
+    # 3 ▸ Build a naïve‐Bayes structure: every feature‐level → Class
+    edges = [(lvl, 'Class') for lvl in level_names]
+    model = BayesianNetwork(edges)
 
-    model.fit(discretized_data, estimator=MaximumLikelihoodEstimator)
-    inference = VariableElimination(model)
+    # 4 ▸ Fit parameters
+    model.fit(disc_df, estimator=MaximumLikelihoodEstimator)
 
-    def get_class_probabilities(l1, l2, l3):
-        evidence = {
-            level_names[0]: l1,
-            level_names[1]: l2,
-            level_names[2]: l3
-        }
-        return inference.query(variables=['Class'], evidence=evidence)
+    # 5 ▸ Prepare inference
+    infer = VariableElimination(model)
 
-    bayesian_classes = []
-    certainty_scores = []
-
-    for row in discretized_features:
-        prob_dist = get_class_probabilities(*row)
-
-        probs = {
-            state: prob_dist.values[j]
-            for j, state in enumerate(prob_dist.state_names['Class'])
+    def query_class(evidence: dict):
+        """Return a dict: {label: probability}"""
+        q = infer.query(variables=['Class'], evidence=evidence)
+        return {
+            state: q.values[i]
+            for i, state in enumerate(q.state_names['Class'])
         }
 
-        best_class = max(probs, key=probs.get)
-        bayesian_classes.append(best_class)
-        certainty_scores.append(probs[best_class])
+    # 6 ▸ For each row, compute MAP class + certainty
+    bayes_labels = []
+    certainties = []
+    for levels in X_disc:
+        ev = {lvl: int(levels[j]) for j, lvl in enumerate(level_names)}
+        probs = query_class(ev)
+        best = max(probs, key=probs.get)
+        bayes_labels.append(best)
+        certainties.append(probs[best])
 
-    real_data["class_bayesian"] = bayesian_classes
-    real_data["Bayesian_Certainty"] = certainty_scores
-    real_data["class_label"] = real_data["class_bayesian"]
-
+    real_data['class_label'] = bayes_labels
+    real_data['Bayesian_Certainty'] = certainties
     return real_data

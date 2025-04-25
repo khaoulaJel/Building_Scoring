@@ -1,47 +1,60 @@
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
-def classify_weighted(df: pd.DataFrame, features: list) -> pd.DataFrame:
+
+def classify_weighted(
+    df: pd.DataFrame,
+    features: list,
+    weights: list,
+    class_labels: list = None
+) -> pd.DataFrame:
     """
-    Weighted classification of any feature list.
-    Lower 'Global_Score' => better class (A)
+    Weighted-sum classification over any number of features.
+    You supply one weight per feature; lower scores → better class.
 
     Args:
-        df (pd.DataFrame): The dataset
-        features (list): List of 3 features to use (e.g., log1p_...)
+        df (pd.DataFrame): Input data
+        features (list of str): Numeric feature column names
+        weights (list of float): Weights for each feature (must match len(features))
+        class_labels (list of str, optional): Labels for each bin,
+            ordered from best (smallest score) to worst. Defaults to ['A','B','C','D','E','F'].
 
     Returns:
-        pd.DataFrame: With 'class_label' and 'class_weighted' columns added
+        pd.DataFrame: Copy of df with two new columns:
+          - "Global_Score"    : The weighted sum of normalized features
+          - "class_label"     : The quantile-based class label
     """
-    assert len(features) == 3, "Expected exactly 3 features"
-
     df = df.copy()
-    
-    # Handle NaN values
-    df[features] = df[features].fillna(df[features].mean())
 
+    # 1) Validate inputs
+    n = len(features)
+    if len(weights) != n:
+        raise ValueError(f"Expected {n} weights, got {len(weights)}")
+    if class_labels is None:
+        class_labels = ['A','B','C','D','E','F']
+    m = len(class_labels)
+
+    # 2) Impute missing & normalize each feature to [0,1]
+    df[features] = df[features].fillna(df[features].mean())
     scaler = MinMaxScaler()
-    norm_cols = [f"{col}_norm" for col in features]
+    norm_cols = [f"{feat}_norm" for feat in features]
     df[norm_cols] = scaler.fit_transform(df[features])
 
-    # Define weights
-    weights = np.array([0.2, 0.3, 0.5])
-    df["Global_Score"] = np.sum(df[norm_cols] * weights, axis=1)
+    # 3) Normalize the weights so they sum to 1
+    w = np.array(weights, dtype=float)
+    w = w / w.sum()
 
-    percentiles = df["Global_Score"].quantile([0.1, 0.3, 0.6, 0.8, 0.9])
+    # 4) Compute the weighted score
+    df["Global_Score"] = df[norm_cols].values.dot(w)
 
-    def classify_score(score):
-        if score <= percentiles[0.1]: return "A"
-        elif score <= percentiles[0.3]: return "B"
-        elif score <= percentiles[0.6]: return "C"
-        elif score <= percentiles[0.8]: return "D"
-        elif score <= percentiles[0.9]: return "E"
-        else: return "F"
+    # 5) Bin into quantiles → class_labels
+    df["class_label"] = pd.qcut(
+        df["Global_Score"],
+        q=m,
+        labels=class_labels
+    ).astype(str)
 
-    df["class_weighted"] = df["Global_Score"].apply(classify_score)
-    df["class_label"] = df["class_weighted"]
-
-    # Clean up temporary columns
-    df = df.drop(columns=norm_cols + ["Global_Score"], errors='ignore')
+    # 6) Clean up (keep Global_Score if you like)
+    df = df.drop(columns=norm_cols, errors='ignore')
 
     return df
