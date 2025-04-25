@@ -17,6 +17,8 @@ from utils.building_selection import (
     display_building_lookup,
     display_building_classifications,
 )
+from scripts.compute_feature_ranges import compute_ranges
+
 
 
 # Set page config with icon and expanded layout
@@ -476,13 +478,14 @@ with col3:
         delta=None
     )
 
-# Main tabs for better organization
-tab1, tab2, tab3, tab4 = st.tabs([
-    " Interactive Map", 
-    " Analytics & Insights", 
-    " Building Data", 
-    " Export & Reports"
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "Interactive Map", 
+    "Analytics & Insights", 
+    "Building Data", 
+    "Export & Reports",
+    "City Statistics"
 ])
+
 
 with tab1:
     if not filtered_df.empty:
@@ -731,7 +734,85 @@ with tab4:
     add_benchmark_comparison(filtered_df)
 
 
+with tab5:
+    st.header("📈 City Statistics by Feature and Class")
 
+    # 1) Select which classification method to inspect
+    methods = {
+        "PCA"        : "class_pca",
+        "Euclidean"  : "class_euclidean",
+        "Mahalanobis": "class_mahalanobis",
+        "Weighted"   : "class_weighted",
+        "Bayesian"   : "class_bayesian"
+    }
+    method_name = st.selectbox("Choose classification method", list(methods.keys()))
+    class_col   = methods[method_name]
+
+    # 2) Select which class (A–F)
+    classes = sorted(st.session_state["df"][class_col].dropna().unique())
+    selected_class = st.selectbox("Choose class", classes)
+
+    # 3) Define the features to summarize
+    features = [
+        "Energy_Consumption",
+        "CO2_Usage",
+        "Water_Usage",
+        "Energy_Intensity",
+        "CO2_Intensity"
+    ]
+
+    # 4) Filter to just that class
+    dfc = st.session_state["df"]
+    dfc = dfc[dfc[class_col] == selected_class]
+
+    # 5) Compute stats
+    stats = {
+        feat: {
+            "mean": dfc[feat].mean(),
+            "max":  dfc[feat].max()
+        }
+        for feat in features
+    }
+
+    # 6) Map class letter to a color
+    class_color = {
+        "A": "#27ae60",
+        "B": "#2ecc71",
+        "C": "#f1c40f",
+        "D": "#e67e22",
+        "E": "#e74c3c",
+        "F": "#c0392b"
+    }
+    bg = class_color.get(selected_class, "#95a5a6")
+
+    # 7) Render each feature as a styled card
+    st.markdown(f"### Class {selected_class} Feature Stats (via {method_name})")
+    cols = st.columns(3)
+    for i, feat in enumerate(features):
+        col = cols[i % 3]
+        mean = stats[feat]["mean"]
+        maxv = stats[feat]["max"]
+        col.markdown(
+            f"""
+            <div style="
+                background:{bg};
+                border-radius:8px;
+                padding:16px;
+                text-align:center;
+                color:white;
+                box-shadow:0 2px 8px rgba(0,0,0,0.2);
+            ">
+                <h4 style="margin:0;font-family:Arial;">{feat.replace('_',' ')}</h4>
+                <p style="margin:8px 0 0 0;font-size:18px;">
+                    Mean: {mean:.1f}
+                </p>
+                <p style="margin:4px 0 0 0;font-size:18px;">
+                    Max:  {maxv:.1f}
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 # Footer
 st.markdown("""
     <div style="text-align: center; margin-top: 30px; padding: 10px; background-color: #f1f3f4; border-radius: 5px;">
