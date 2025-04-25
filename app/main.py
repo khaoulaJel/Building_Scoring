@@ -14,9 +14,8 @@ from utils.export import add_export_section, add_benchmark_comparison
 from pathlib import Path
 
 from utils.building_selection import (
-    setup_building_selection,
-    display_clickable_map,
-    display_building_classifications
+    display_building_lookup,
+    display_building_classifications,
 )
 
 
@@ -276,8 +275,11 @@ with st.sidebar:
             
     # Scoring basis
     st.subheader("Scoring Basis")
-    scoring_basis = st.radio("Choose scoring basis", ["Total (kWh)", "Per m² (kWh/m²/year)"])
-    
+    scoring_basis = st.radio(
+        "Choose scoring basis",
+        ["Total (kWh)", "Per m² (kWh/m²/year)"]
+    )
+
     # Validate and preprocess dataset
     df = validate_and_preprocess_dataset(df, scoring_basis)
     if df is None:
@@ -285,55 +287,72 @@ with st.sidebar:
         selected_city = "Lyon"
         st.warning("Invalid dataset. Reverted to default Lyon dataset")
         df = validate_and_preprocess_dataset(df, scoring_basis)
-    
-    # Replace metrics for intensity-based scoring
+
+    # Replace metrics for intensity‐based scoring
     if scoring_basis == "Per m² (kWh/m²/year)":
         if "Energy_Intensity" in df.columns and "CO2_Intensity" in df.columns:
             df["Energy_Consumption"] = df["Energy_Intensity"]
             df["CO2_Usage"] = df["CO2_Intensity"]
-    
-    # Feature selection for classification
+
     st.subheader("Classification Features")
     available_features = [
         "Energy_Consumption", "CO2_Usage", "Water_Usage",
         "Energy_Intensity", "CO2_Intensity"
     ]
     available_features = [f for f in available_features if f in df.columns]
+
     selected_features = st.multiselect(
-        "Select 3 Features",
+        "Select Features for Classification",
         options=available_features,
-        default=["Energy_Consumption", "CO2_Usage", "Water_Usage"],
-        max_selections=3,
+        default=["Energy_Consumption", "CO2_Usage"],
+        # no max_selections → user can pick as many as they want
         key="classification_features"
     )
-    
-    if len(selected_features) != 3:
-        st.error("Please select exactly 3 features for classification.")
+
+    # enforce at least one feature
+    if len(selected_features) < 1:
+        st.error("Please select at least one feature for classification.")
         st.stop()
-    
-    # Add classifications if missing
-    df = add_classifications(df)
-    
+
+
     # Cache in session state
-    st.session_state["df"] = df
+    st.session_state["df"]   = df
     st.session_state["city"] = selected_city
-    
+
     # Classification method selection
     st.header("Analysis Method")
     classification_methods = {
-        "Euclidean Distance": "Euclidean Distance",
-        "Mahalanobis Distance": "Mahalanobis Distance",
-        "PCA Classification": "PCA Classification",
+        "Euclidean Distance"    : "Euclidean Distance",
+        "Mahalanobis Distance"  : "Mahalanobis Distance",
+        "PCA Classification"    : "PCA Classification",
         "Weighted Classification": "Weighted Classification",
         "Bayesian Classification": "Bayesian Classification"
     }
-    
+
     classification_method = st.radio(
         "Select Classification Method",
-        list(classification_methods.keys()),
+        options=list(classification_methods.keys()),
         format_func=lambda x: classification_methods[x]
     )
     
+    weights = None
+    if classification_method == "Weighted Classification":
+        st.subheader("Enter weights for each feature")
+        weights = []
+        # Show a number_input for each selected feature:
+        for feat in selected_features:
+            w = st.number_input(
+                f"Weight for {feat}",
+                min_value=0.0, 
+                max_value=1.0, 
+                value=round(1/len(selected_features), 2),
+                step=0.01,
+                key=f"weight_{feat}"
+            )
+            weights.append(w)
+        # Pass the user’s list straight into add_classifications
+    df = add_classifications(df, features=selected_features, weights=weights)
+        
     # Apply selected classification
     with st.spinner(f"Applying {classification_method}..."):
         class_column_mapping = {
@@ -357,7 +376,7 @@ with st.sidebar:
             df = classify_pca(df, features=selected_features)
         elif classification_method == "Weighted Classification":
             from models.weighted import classify_weighted
-            df = classify_weighted(df, features=selected_features)
+            df = classify_weighted(df, features=selected_features, weights=weights)
         elif classification_method == "Bayesian Classification":
             from models.bayesian import classify_bayesian
             df = classify_bayesian(df, features=selected_features)
@@ -371,44 +390,6 @@ with st.sidebar:
         
         # Cache updated DataFrame
         st.session_state["df"] = df
-        
-with st.spinner(f"Applying {classification_method}..."):
-    class_column_mapping = {
-        "Euclidean Distance": "class_euclidean",
-        "Mahalanobis Distance": "class_mahalanobis",
-        "PCA Classification": "class_pca",
-        "Weighted Classification": "class_weighted",
-        "Bayesian Classification": "class_bayesian"
-    }
-    selected_class_column = class_column_mapping[classification_method]
-    
-    # Apply the selected classification method
-    features = ["Energy_Consumption", "CO2_Usage", "Water_Usage"]
-    if classification_method == "Euclidean Distance":
-        from models.euclidean import classify_euclidean
-        df = classify_euclidean(df, features=features)
-    elif classification_method == "Mahalanobis Distance":
-        from models.mahalanobis import classify_mahalanobis
-        df = classify_mahalanobis(df, features=features, return_distance=True)
-    elif classification_method == "PCA Classification":
-        from models.pca import classify_pca
-        df = classify_pca(df, features=features)
-    elif classification_method == "Weighted Classification":
-        from models.weighted import classify_weighted
-        df = classify_weighted(df, features=features)
-    elif classification_method == "Bayesian Classification":
-        from models.bayesian import classify_bayesian
-        df = classify_bayesian(df, features=features)
-    
-    # Assign class_label from the mapped column
-    if selected_class_column in df.columns:
-        df["class_label"] = df[selected_class_column]
-    else:
-        st.error(f"Column '{selected_class_column}' not found after classification. Check the classification function.")
-        st.stop()
-    
-    # Cache updated DataFrame
-    st.session_state["df"] = df
         
 
 # Check if empty
@@ -504,58 +485,62 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 with tab1:
-    # Map section
-    st.markdown(f"<h2 style='text-align: center;'>Interactive Map: {selected_city}</h2>", unsafe_allow_html=True)
-    
-    # Initialize session state for panel visibility if not exists
-    if 'left_panel_visible' not in st.session_state:
-        st.session_state['left_panel_visible'] = False
-    if 'right_panel_visible' not in st.session_state:
-        st.session_state['right_panel_visible'] = False
-    
-    
-    # Create columns for the three sections
-    main_container = st.container()
-    
-    
+    if not filtered_df.empty:
+        display_map(filtered_df, selected_city, color_by)
+    else:
+        st.warning("No buildings match the current filters")
+        st.stop()  # ← stop further execution instead of return
 
-    
-    # Right panel content (Building details)
-    right_col = st.container()
-    with right_col:
-        st.subheader("Building Details")
-        
-        if not filtered_df.empty:
-            building_id = st.selectbox(
-                "Select Building",
-                filtered_df["building_id"].tolist(),
-                format_func=lambda x: f"Building {x}"
-            )
-            
-            selected_building = filtered_df[filtered_df["building_id"] == building_id]
-            if not selected_building.empty:
-                st.markdown(f"**Class:** {selected_building['class_label'].values[0]}")
-                st.markdown(f"**CO₂:** {selected_building['CO2_Usage'].values[0]:.1f}kg")
-                st.markdown(f"**Energy:** {selected_building['Energy_Consumption'].values[0]:.1f}kWh")
-                
-                # Add to comparison
-                if st.button("➕ Add to Comparison"):
-                    if building_id not in [b["building_id"] for b in st.session_state['comparison_buildings']]:
-                        st.session_state['comparison_buildings'].append(selected_building.iloc[0].to_dict())
-                        st.success("Added to comparison")
-                    else:
-                        st.warning("Already in comparison")
-    
-        # Main content - Map + detail sidebar
-    with main_container:
-        if not filtered_df.empty:
-            selected_building_id = display_clickable_map(filtered_df, selected_city, color_by)
-            
-            with st.container():
-                st.markdown("<hr>", unsafe_allow_html=True)
-                display_building_classifications(df, selected_building_id)
-        else:
-            st.warning("No buildings match the current filters")
+    st.markdown("---")
+
+    # Free-text lookup below the map
+    st.subheader("🔎 Find a Building by Keyword")
+    search_fields = [
+        "adresse_ban", "nom_rue_ban", "code_postal_ban",
+        "nom_commune_ban", "adresse_brut"
+    ]
+    building_id = display_building_lookup(
+        st.session_state["df"],
+        info_fields=search_fields
+    )
+
+    # Show details & “Add to Comparison”
+    if building_id:
+        bd = st.session_state["df"].loc[
+            st.session_state["df"]["building_id"] == building_id
+        ].iloc[0]
+
+        st.markdown("### 🏢 Building Details")
+        col1, col2 = st.columns([3,1])
+        with col1:
+            st.markdown(f"**ID:** {building_id}")
+            st.markdown(f"**Class:** {bd['class_label']}")
+            st.markdown(f"**CO₂ Usage:** {bd['CO2_Usage']:.1f} kg")
+            st.markdown(f"**Energy Consumption:** {bd['Energy_Consumption']:.1f} kWh")
+        with col2:
+            if st.button("➕ Add to Comparison", key="add_to_comp"):
+                existing = [b["building_id"] for b in st.session_state['comparison_buildings']]
+                if building_id in existing:
+                    st.warning("Already in comparison")
+                else:
+                    st.session_state['comparison_buildings'].append(bd.to_dict())
+                    st.success("Added to comparison")
+
+        st.markdown("---")
+        display_building_classifications(st.session_state["df"], building_id)
+
+    # Comparison table at the bottom
+    if st.session_state['comparison_buildings']:
+        st.markdown("---")
+        st.subheader("📊 Comparison of Selected Buildings")
+        comp_df = pd.DataFrame(st.session_state['comparison_buildings'])
+        st.dataframe(
+            comp_df[[
+                "building_id", "class_label",
+                "CO2_Usage", "Energy_Consumption", "Water_Usage"
+            ]],
+            use_container_width=True
+        )
 
 
 
