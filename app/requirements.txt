@@ -14,5 +14,6 @@ pydeck
 osmnx
 geopandas
 pgmpy
-#pip install -r requirements.txt
-
+sqlalchemy
+flask
+psycopg2-binary

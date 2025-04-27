@@ -244,16 +244,16 @@ with st.sidebar:
     # Load and validate dataset
     if dataset_option == "Default (Lyon)":
         with st.spinner("Loading Lyon data..."):
-            df = pd.read_csv("data/reduced_lyon_buildings.csv")
+            df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
             selected_city = "Lyon"
     elif dataset_option == "Gordes":
         with st.spinner("Loading Gordes data..."):
             try:
-                df = pd.read_csv("data/reduced_gordes_buildings.csv")
+                df = pd.read_csv("data/reduced_gordes_buildings_all_years.csv")
                 selected_city = "Gordes"
             except FileNotFoundError:
-                st.error("Gordes dataset file 'data/reduced_gordes_buildings.csv' not found.")
-                df = pd.read_csv("data/reduced_lyon_buildings.csv")
+                st.error("Gordes dataset file 'data/reduced_gordes_buildings_all_years.csv' not found.")
+                df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
                 selected_city = "Lyon"
                 st.warning("Reverted to default Lyon dataset")
                 st.write(f"Fallback dataset: {selected_city}")  # Debug
@@ -265,13 +265,13 @@ with st.sidebar:
                     selected_city = "Custom Dataset"
                 except Exception as e:
                     st.error(f"Error loading CSV file: {str(e)}")
-                    df = pd.read_csv("data/reduced_lyon_buildings.csv")
+                    df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
                     selected_city = "Lyon"
                     st.warning("Reverted to default Lyon dataset")
                     st.write(f"Fallback dataset: {selected_city}")  # Debug
         else:
             st.info("Please upload a CSV file to proceed.")
-            df = pd.read_csv("data/reduced_lyon_buildings.csv")
+            df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
             selected_city = "Lyon"
             st.write(f"Using default dataset: {selected_city}")  # Debug
             
@@ -285,7 +285,7 @@ with st.sidebar:
     # Validate and preprocess dataset
     df = validate_and_preprocess_dataset(df, scoring_basis)
     if df is None:
-        df = pd.read_csv("data/reduced_lyon_buildings.csv")
+        df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
         selected_city = "Lyon"
         st.warning("Invalid dataset. Reverted to default Lyon dataset")
         df = validate_and_preprocess_dataset(df, scoring_basis)
@@ -478,12 +478,13 @@ with col3:
         delta=None
     )
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5,tab6 = st.tabs([
     "Interactive Map", 
     "Analytics & Insights", 
     "Building Data", 
     "Export & Reports",
-    "City Statistics"
+    "City Statistics",
+    "Year-over-Year Comparison"
 ])
 
 
@@ -775,7 +776,7 @@ with tab5:
     }
 
     # 6) Map class letter to a color
-    class_color = {
+    class_colors = {
         "A": "#27ae60",
         "B": "#2ecc71",
         "C": "#f1c40f",
@@ -783,7 +784,7 @@ with tab5:
         "E": "#e74c3c",
         "F": "#c0392b"
     }
-    bg = class_color.get(selected_class, "#95a5a6")
+    bg = class_colors.get(selected_class, "#95a5a6")
 
     # 7) Render each feature as a styled card
     st.markdown(f"### Class {selected_class} Feature Stats (via {method_name})")
@@ -814,6 +815,53 @@ with tab5:
             unsafe_allow_html=True
         )
 # Footer
+
+
+with tab6:
+    st.header("📊 Year-over-Year Comparison (2024 vs 2025)")
+
+    # 1) Class counts by year
+    counts = df.groupby(["class_label", "year"]).size().unstack(fill_value=0)
+    st.subheader("Building Counts by Class and Year")
+    st.dataframe(counts.style.format("{:,}"))
+
+    # 2) Bar chart (Plotly)
+    import plotly.graph_objects as go
+    fig = go.Figure([
+        go.Bar(name="2024", x=counts.index, y=counts[2024]),
+        go.Bar(name="2025", x=counts.index, y=counts[2025]),
+    ])
+    fig.update_layout(
+        barmode="group",
+        xaxis_title="Class",
+        yaxis_title="Count of Buildings",
+        legend_title="Year",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # 3) Delta per class
+    delta = counts[2025] - counts[2024]
+    pct  = (delta / counts[2024] * 100).fillna(0)
+    delta_df = pd.DataFrame({
+        "Class":        counts.index,
+        "Δ Count":      delta.values,
+        "Δ %":          pct.values
+    })
+    st.subheader("Change in Counts (2025 – 2024)")
+    st.dataframe(delta_df.style.format({"Δ Count":"{:+,}","Δ %":"{:+.1f}%"}), use_container_width=True)
+
+    # 4) Summary metrics
+    tot2024 = len(df[df.year == 2024])
+    tot2025 = len(df[df.year == 2025])
+    totΔ     = tot2025 - tot2024
+    avg_cons = df.groupby("year")["Energy_Consumption"].mean()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Buildings 2024", f"{tot2024:,}")
+    c2.metric("Total Buildings 2025", f"{tot2025:,}", delta=f"{totΔ:+,}")
+    c3.metric("Avg Energy 2024", f"{avg_cons.get(2024,0):.1f} kWh")
+    c4.metric("Avg Energy 2025", f"{avg_cons.get(2025,0):.1f} kWh",
+             delta=f"{(avg_cons.get(2025,0)-avg_cons.get(2024,0)):+.1f} kWh")
+    
 st.markdown("""
     <div style="text-align: center; margin-top: 30px; padding: 10px; background-color: #f1f3f4; border-radius: 5px;">
         <p style="margin: 0; color: #555;">Building Analytics Dashboard • Created with ❤️ • Data updated: April 2025</p>
