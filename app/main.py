@@ -26,6 +26,15 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+CITY_PATHS = {
+    "Lyon":   "data/reduced_lyon_buildings_all_years.csv",
+    "Gordes": "data/reduced_gordes_buildings_all_years.csv",
+    # add more cities here as needed
+}
+@st.cache_data
+def load_city_data(city_name):
+    df_city = pd.read_csv(CITY_PATHS[city_name])
+    return validate_and_preprocess_dataset(df_city, scoring_basis)
 
 # Load CSS from external file
 load_css("styles.css")
@@ -291,13 +300,14 @@ with col3:
         delta=None
     )
 
-tab1, tab2, tab3, tab4, tab5,tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5,tab6,tab7 = st.tabs([
     "Interactive Map", 
     "Analytics & Insights", 
     "Building Data", 
     "Export & Reports",
     "City Statistics",
-    "Year-over-Year Comparison"
+    "Year-over-Year Comparison",
+    "Compare Cities"
 ])
 
 
@@ -552,9 +562,13 @@ with tab4:
     add_benchmark_comparison(filtered_df)
 
 with tab5:
-    st.header("📈 City Statistics by Feature and Class")
+    import streamlit as st
+    import pandas as pd
+    import plotly.express as px
 
-    # 1) Select which classification method to inspect
+    st.header("📊 City Statistics by Feature & Class")
+
+    # 1) Pick method & class
     methods = {
         "PCA"        : "class_pca",
         "Euclidean"  : "class_euclidean",
@@ -562,76 +576,77 @@ with tab5:
         "Weighted"   : "class_weighted",
         "Bayesian"   : "class_bayesian"
     }
-    method_name = st.selectbox("Choose classification method", list(methods.keys()))
-    class_col   = methods[method_name]
+    method_name    = st.selectbox("Classification Method", list(methods))
+    class_col      = methods[method_name]
+    classes        = sorted(st.session_state["df"][class_col].dropna().unique())
+    selected_class = st.selectbox("Energy Class", classes)
 
-    # 2) Select which class (A–F)
-    classes = sorted(st.session_state["df"][class_col].dropna().unique())
-    selected_class = st.selectbox("Choose class", classes)
+    # 2) Features split
+    consumption_feats = {
+        "Energy_Consumption": "Energy (kWh)",
+        "CO2_Usage":          "CO₂ (kg)",
+        "Water_Usage":        "Water (L)"
+    }
+    intensity_feats = {
+        "Energy_Intensity": "Energy Intensity (kWh/m²)",
+        "CO2_Intensity":    "CO₂ Intensity (kg/m²)"
+    }
 
-    # 3) Define the features to summarize
-    features = [
-        "Energy_Consumption",
-        "CO2_Usage",
-        "Water_Usage",
-        "Energy_Intensity",
-        "CO2_Intensity"
-    ]
-
-    # 4) Filter to just that class
     dfc = st.session_state["df"]
     dfc = dfc[dfc[class_col] == selected_class]
 
-    # 5) Compute stats
-    stats = {
-        feat: {
-            "mean": dfc[feat].mean(),
-            "max":  dfc[feat].max()
-        }
-        for feat in features
-    }
+    def compute_stats(feat_map):
+        rows = []
+        for feat, label in feat_map.items():
+            if feat not in dfc.columns:
+                continue
+            mn  = dfc[feat].min()
+            mx  = dfc[feat].max()
+            avg = dfc[feat].mean()
+            rows.append({
+                "Feature": label,
+                "Min":     mn,
+                "Mean":    avg,
+                "Max":     mx
+            })
+        return pd.DataFrame(rows)
 
-    # 6) Map class letter to a color
-    class_colors = {
-        "A": "#27ae60",
-        "B": "#2ecc71",
-        "C": "#f1c40f",
-        "D": "#e67e22",
-        "E": "#e74c3c",
-        "F": "#c0392b"
-    }
-    bg = class_colors.get(selected_class, "#95a5a6")
+    # 3) Consumption stats & chart
+    cons_df = compute_stats(consumption_feats)
+    st.subheader(f"🛢️ Consumption Stats for Class {selected_class} ({method_name})")
+    st.table(cons_df.style.format({"Min":"{:.1f}","Mean":"{:.1f}","Max":"{:.1f}"}))
 
-    # 7) Render each feature as a styled card
-    st.markdown(f"### Class {selected_class} Feature Stats (via {method_name})")
-    cols = st.columns(3)
-    for i, feat in enumerate(features):
-        col = cols[i % 3]
-        mean = stats[feat]["mean"]
-        maxv = stats[feat]["max"]
-        col.markdown(
-            f"""
-            <div style="
-                background:{bg};
-                border-radius:8px;
-                padding:16px;
-                text-align:center;
-                color:white;
-                box-shadow:0 2px 8px rgba(0,0,0,0.2);
-            ">
-                <h4 style="margin:0;font-family:Arial;">{feat.replace('_',' ')}</h4>
-                <p style="margin:8px 0 0 0;font-size:18px;">
-                    Mean: {mean:.1f}
-                </p>
-                <p style="margin:4px 0 0 0;font-size:18px;">
-                    Max:  {maxv:.1f}
-                </p>
-            </div>
-            """,
-            unsafe_allow_html=True
+    fig1 = px.bar(
+        cons_df.melt(id_vars="Feature", var_name="Stat", value_name="Value"),
+        x="Value", y="Feature", color="Stat",
+        barmode="group", text="Value",
+        color_discrete_map={"Min":"#A6A6A6","Mean":"#1F78B4","Max":"#333333"},
+        labels={"Value":"Usage","Feature":""},
+        title="Consumption: Min vs Mean vs Max"
+    )
+    fig1.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+    fig1.update_layout(margin=dict(l=150, r=20, t=50, b=20), height=350)
+    st.plotly_chart(fig1, use_container_width=True)
+
+    # 4) Intensity stats & chart (if available)
+    int_df = compute_stats(intensity_feats)
+    if not int_df.empty:
+        st.subheader(f"📐 Intensity Stats for Class {selected_class} ({method_name})")
+        st.table(int_df.style.format({"Min":"{:.2f}","Mean":"{:.2f}","Max":"{:.2f}"}))
+
+        fig2 = px.bar(
+            int_df.melt(id_vars="Feature", var_name="Stat", value_name="Value"),
+            x="Value", y="Feature", color="Stat",
+            barmode="group", text="Value",
+            color_discrete_map={"Min":"#A6A6A6","Mean":"#33A02C","Max":"#333333"},
+            labels={"Value":"Intensity","Feature":""},
+            title="Intensity: Min vs Mean vs Max"
         )
-# Footer
-
+        fig2.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+        fig2.update_layout(margin=dict(l=200, r=20, t=50, b=20), height=300)
+        st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("No intensity columns found; showing consumption only.")
 
 with tab6:
     st.header("📊 Year-over-Year Comparison (2024 vs 2025)")
@@ -752,6 +767,177 @@ with tab6:
             )
             
             st.plotly_chart(fig_pie, use_container_width=True)
+with tab7:
+    import streamlit as st
+    import pandas as pd
+    import plotly.express as px
+    import plotly.graph_objects as go
+    from datetime import datetime
+    from models.euclidean import classify_euclidean
+    from models.mahalanobis import classify_mahalanobis
+    from models.pca import classify_pca
+    from models.weighted import classify_weighted
+    from models.bayesian import classify_bayesian
+
+    # --- Helper to load & classify (avoid hashing the function) ---
+    @st.cache_data(show_spinner=False)
+    def load_and_prepare(city_path, year, features, weights, _method_fn, col_name, sel_class, scoring_basis):
+        df = pd.read_csv(city_path)
+        df = validate_and_preprocess_dataset(df, scoring_basis)
+        df = df[df.year == year]
+        df = add_classifications(df, features=features, weights=weights)
+        df = _method_fn(df)
+        df['class_label'] = df[col_name]
+        if sel_class != "All":
+            df = df[df.class_label == sel_class]
+        return df
+
+    # --- Controls ---
+    years      = sorted(pd.read_csv(CITY_PATHS[next(iter(CITY_PATHS))])['year'].unique())
+    sel_years  = st.multiselect("Snapshot Years", options=years, default=[datetime.now().year])
+    norm_opt   = st.radio("Metric Basis", ["Absolute (Total)", "Normalized (per m²)"])
+    sel_cities = st.multiselect("Cities to compare", list(CITY_PATHS), default=list(CITY_PATHS)[:2])
+    if len(sel_cities) < 2:
+        st.info("Select at least two cities to compare.")
+        st.stop()
+    sel_class  = st.selectbox("Filter by Energy Class", ["All"] + list("ABCDEF"))
+
+    methods = {
+        "Euclidean":   lambda d: classify_euclidean(d, features=selected_features),
+        "Mahalanobis": lambda d: classify_mahalanobis(d, features=selected_features, return_distance=True),
+        "PCA":         lambda d: classify_pca(d, features=selected_features),
+        "Weighted":    lambda d: classify_weighted(d, features=selected_features, weights=weights),
+        "Bayesian":    lambda d: classify_bayesian(d, features=selected_features)
+    }
+    cols_map = {
+        "Euclidean":   "class_euclidean",
+        "Mahalanobis": "class_mahalanobis",
+        "PCA":         "class_pca",
+        "Weighted":    "class_weighted",
+        "Bayesian":    "class_bayesian"
+    }
+    sel_method = st.selectbox("Classification Method", list(methods.keys()))
+    method_fn  = methods[sel_method]
+    col_name   = cols_map[sel_method]
+
+    # --- Load & summarize each year ---
+    yearly_summaries = {}
+    yearly_city_dfs  = {}
+    for year in sel_years:
+        city_dfs = {}
+        for city in sel_cities:
+            df = load_and_prepare(
+                CITY_PATHS[city], year,
+                selected_features, weights,
+                method_fn, col_name,
+                sel_class, scoring_basis
+            )
+            if not df.empty:
+                city_dfs[city] = df
+        if len(city_dfs) >= 2:
+            yearly_city_dfs[year] = city_dfs
+            summary = []
+            for city, df in city_dfs.items():
+                e_col = "Energy_Consumption" if norm_opt=="Absolute (Total)" else "Energy_Intensity"
+                c_col = "CO2_Usage"
+                w_col = "Water_Usage"
+                summary.append({
+                    "City":     city,
+                    "AvgEnergy": df[e_col].mean(),
+                    "AvgCO2":    df[c_col].mean(),
+                    "AvgWater":  df[w_col].mean()
+                })
+            yearly_summaries[year] = pd.DataFrame(summary).set_index("City")
+
+    if not yearly_summaries:
+        st.error("No valid data to compare."); st.stop()
+
+    # --- Dashboard for the latest selected year ---
+    latest   = max(yearly_summaries)
+    summ_df  = yearly_summaries[latest]
+    city_dfs = yearly_city_dfs[latest]
+
+    # 1) Avg metrics
+    st.subheader(f"🏆 {latest} Avg Metrics")
+    cols = st.columns(len(summ_df))
+    for (city, row), col in zip(summ_df.iterrows(), cols):
+        col.subheader(city)
+        col.metric("⚡ Energy", f"{row.AvgEnergy:.1f} kWh")
+        col.metric("🌱 CO₂",    f"{row.AvgCO2:.1f} kg")
+        col.metric("💧 Water",  f"{row.AvgWater:.1f} L")
+
+    # 2) Energy class distribution
+    st.subheader(f"🏷️ {latest} Class Distribution")
+    dist = (
+        pd.concat([df.class_label.value_counts(normalize=True)*100 for df in city_dfs.values()], axis=1)
+          .fillna(0)
+    )
+    dist.columns = sel_cities
+    dist = dist.T.reset_index().melt(id_vars="index", var_name="Class", value_name="Pct")
+    dist.rename(columns={"index":"City"}, inplace=True)
+    fig1 = px.bar(dist, x="City", y="Pct", color="Class", barmode="stack", text_auto=".1f")
+    fig1.update_layout(yaxis_title="%", height=350)
+    st.plotly_chart(fig1, use_container_width=True)
+
+    # 3) Radar chart
+    st.subheader("📊 Multivariate Radar Chart")
+    fig_radar = go.Figure()
+    for city, row in summ_df.iterrows():
+        fig_radar.add_trace(go.Scatterpolar(
+            r=[row.AvgEnergy, row.AvgCO2, row.AvgWater],
+            theta=["Energy","CO₂","Water"],
+            name=city,
+            fill="toself"
+        ))
+    fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True)), showlegend=True, height=450)
+    st.plotly_chart(fig_radar, use_container_width=True)
+
+    # 4) Indexed Year-on-Year Change (Base = first selected year → 100)
+    # 4) Yearly Average Trends (raw values)
+    st.subheader("📈 Yearly Average Trends")
+
+    trend_list = []
+    for yr, city_dfs in yearly_city_dfs.items():
+        for city, df in city_dfs.items():
+            e_col = "Energy_Consumption" if norm_opt=="Absolute (Total)" else "Energy_Intensity"
+            c_col = "CO2_Usage"         if norm_opt=="Absolute (Total)" else "CO2_Intensity"
+            w_col = "Water_Usage"       # always use absolute for now
+
+            trend_list.append({"Year": yr, "City": city, "Metric": "Energy", "Value": df[e_col].mean()})
+            trend_list.append({"Year": yr, "City": city, "Metric": "CO₂",    "Value": df[c_col].mean()})
+            trend_list.append({"Year": yr, "City": city, "Metric": "Water",  "Value": df[w_col].mean()})
+
+    trend_df = pd.DataFrame(trend_list)
+
+    fig_trend = px.line(
+        trend_df,
+        x="Year", y="Value",
+        color="City",
+        facet_col="Metric",
+        facet_col_wrap=3,
+        markers=True,
+        title="Average Consumption by City Over Years"
+    )
+    # allow each facet to scale independently
+    fig_trend.update_yaxes(matches=None)
+    st.plotly_chart(fig_trend, use_container_width=True, height=600)
+
+
+    # 5) Key insights & export
+    st.subheader("💡 Key Insights")
+    best  = summ_df.AvgEnergy.idxmin()
+    worst = summ_df.AvgEnergy.idxmax()
+    st.markdown(
+        f"- **{best}** has the lowest avg energy in {latest} ({summ_df.loc[best,'AvgEnergy']:.1f} kWh).\n"
+        f"- **{worst}** has the highest avg energy ({summ_df.loc[worst,'AvgEnergy']:.1f} kWh)."
+    )
+
+    st.subheader("📥 Export Summary")
+    csv = summ_df.to_csv().encode("utf-8")
+    st.download_button("Download CSV", csv, f"city_compare_{latest}.csv", "text/csv")
+
+    
+
     
 st.markdown("""
     <div style="text-align: center; margin-top: 30px; padding: 10px; background-color: #f1f3f4; border-radius: 5px;">
