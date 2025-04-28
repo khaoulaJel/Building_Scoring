@@ -303,10 +303,14 @@ tab1, tab2, tab3, tab4, tab5,tab6 = st.tabs([
 
 with tab1:
     if not filtered_df.empty:
-        display_map(filtered_df, selected_city, color_by)
+        # Limit to maximum 2000 buildings for map display
+        map_df = filtered_df.head(2000) if len(filtered_df) > 2000 else filtered_df
+        if len(filtered_df) > 2000:
+            st.warning(f"Map showing 2,000 of {len(filtered_df):,} buildings. Apply filters to refine results.")
+        display_map(map_df, selected_city, color_by)
     else:
         st.warning("No buildings match the current filters")
-        st.stop()  # ← stop further execution instead of return
+        st.stop() 
 
     st.markdown("---")
 
