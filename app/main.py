@@ -11,6 +11,7 @@ from visualization.charts import display_relationship_plot, display_distribution
 from visualization.model_specific import display_model_visualization
 from utils.metrics import display_metrics_overview
 from utils.export import add_export_section, add_benchmark_comparison
+from utils.css_loader import load_css
 from pathlib import Path
 
 from utils.building_selection import (
@@ -19,8 +20,6 @@ from utils.building_selection import (
 )
 from scripts.compute_feature_ranges import compute_ranges
 
-
-
 # Set page config with icon and expanded layout
 st.set_page_config(
     page_title="Building Analytics Dashboard",
@@ -28,194 +27,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-st.markdown("""
-    <style>
-        /* Modern Enterprise UI Styles */
-        .main {
-            background-color: #f8f9fa;
-        }
-        
-        .stApp {
-            max-width: 1800px;
-            margin: 0 auto;
-        }
-        
-        .main-header {
-            background: linear-gradient(90deg, #0052a5, #0077cc);
-            color: white;
-            padding: 1.5rem;
-            border-radius: 0px;
-            margin-bottom: 0.5rem;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        
-        .card {
-            background-color: white;
-            border-radius: 8px;
-            padding: 1.5rem;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-            margin-bottom: 1rem;
-            border: 1px solid #e0e0e0;
-        }
-        
-        .metric-card {
-            text-align: center;
-            padding: 1rem;
-            border-radius: 6px;
-            background: white;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-            border: 1px solid #e0e0e0;
-            transition: transform 0.2s;
-        }
-        
-        .metric-card:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 3px 6px rgba(0,0,0,0.1);
-        }
-        .metric-card h2, 
-        .metric-card h3, 
-        .metric-card p {
-            color: #333 !important;
-        }
-        
-        /* Clean up layout */
-        .css-1d391kg {
-            padding-top: 1rem;
-        }
-        
-        /* Hide default Streamlit header and footer */
-        #MainMenu, footer {visibility: hidden;}
-        
-        /* Custom tabs */
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 4px;
-        }
-        
-        .stTabs [data-baseweb="tab"] {
-            height: 40px;
-            white-space: nowrap;
-            background-color: #f1f3f4;
-            border-radius: 4px 4px 0 0;
-            padding: 0 16px;
-            font-weight: 500;
-            font-size: 0.9rem;
-        }
-        
-        .stTabs [aria-selected="true"] {
-            background-color: #0077cc !important;
-            color: black !important;
-        }
-        
-        /* Filter panel styling */
-        .filter-panel {
-            background-color: white;
-            padding: 1rem;
-            border-radius: 8px;
-            margin-bottom: 1rem;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-            border: 1px solid #e0e0e0;
-        }
-        
-        /* Larger map container */
-        .map-container {
-            height: 600px;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            margin-bottom: 1rem;
-        }
-        
-        /* Compact form elements */
-        .stSlider, .stSelectbox, .stTextInput {
-            margin-bottom: 0.5rem;
-        }
-        
-        /* Status bar */
-        .status-bar {
-            background-color: #f1f3f4;
-            padding: 0.5rem 1rem;
-            border-radius: 4px;
-            margin-bottom: 1rem;
-            font-size: 0.9rem;
-        }
-            /* Full screen map container */
-    .full-map-container {
-        position: relative;
-        height: 100vh;
-        width: 100%;
-        overflow: hidden;
-        margin: 0;
-        padding: 0;
-
-    }
-
-    /* Slide-in panel styling */
-    .slide-panel {
-        position: absolute;
-        background-color: white;
-        border-radius: 8px;
-        box-shadow: 0 0 10px rgba(0,0,0,0.2);
-        padding: 15px;
-        transition: transform 0.3s ease-in-out;
-        z-index: 1000;
-        max-height: 85vh;
-        overflow-y: auto;
-    }
-
-    .slide-panel-left {
-        left: 0;
-        top: 0;
-        width: 300px;
-        height: 100%;
-        transform: translateX(-100%);
-    }
-
-    .slide-panel-right {
-        right: 0;
-        top: 0;
-        width: 300px;
-        height: 100%;
-        transform: translateX(100%);
-    }
-
-    .slide-panel-visible-left {
-        transform: translateX(0);
-    }
-
-    .slide-panel-visible-right {
-        transform: translateX(0);
-    }
-
-    .panel-toggle {
-        position: absolute;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 30px;
-        height: 60px;
-        background-color: white;
-        border-radius: 0 8px 8px 0;
-        box-shadow: 2px 0 5px rgba(0,0,0,0.1);
-        cursor: pointer;
-        z-index: 999;
-    }
-
-    .panel-toggle-left {
-        left: 0;
-        top: 50%;
-        transform: translateY(-50%);
-    }
-
-    .panel-toggle-right {
-        right: 0;
-        top: 50%;
-        transform: translateY(-50%);
-        border-radius: 8px 0 0 8px;
-    }
-
-    
-    </style>
-""", unsafe_allow_html=True)
+# Load CSS from external file
+load_css("styles.css")
 
 # App header with gradient
 st.markdown('<div class="main-header"><h1 style="text-align: center;"> Building Analytics Dashboard</h1></div>', unsafe_allow_html=True)
@@ -352,7 +165,7 @@ with st.sidebar:
                 key=f"weight_{feat}"
             )
             weights.append(w)
-        # Pass the user’s list straight into add_classifications
+        # Pass the user's list straight into add_classifications
     df = add_classifications(df, features=selected_features, weights=weights)
         
     # Apply selected classification
@@ -508,7 +321,7 @@ with tab1:
         info_fields=search_fields
     )
 
-    # Show details & “Add to Comparison”
+    # Show details & "Add to Comparison"
     if building_id:
         bd = st.session_state["df"].loc[
             st.session_state["df"]["building_id"] == building_id
@@ -734,7 +547,6 @@ with tab4:
     
     add_benchmark_comparison(filtered_df)
 
-
 with tab5:
     st.header("📈 City Statistics by Feature and Class")
 
@@ -861,6 +673,81 @@ with tab6:
     c3.metric("Avg Energy 2024", f"{avg_cons.get(2024,0):.1f} kWh")
     c4.metric("Avg Energy 2025", f"{avg_cons.get(2025,0):.1f} kWh",
              delta=f"{(avg_cons.get(2025,0)-avg_cons.get(2024,0)):+.1f} kWh")
+    
+    # 5) Class Comparison Over Years - Area Chart Only
+    st.subheader("Building Class Distribution Evolution")
+
+    # Get unique years dynamically from the dataframe
+    available_years = sorted(df['year'].unique())
+
+    # Prepare data for stacked area chart
+    class_years = {}
+    for year in available_years:
+        for cls in counts.index:
+            if year in counts.columns:
+                class_years.setdefault(cls, []).append(counts.loc[cls, year] if cls in counts.index else 0)
+
+    # Create stacked area chart showing class breakdown over years
+    fig_area = go.Figure()
+
+    # Colors for consistency
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+
+    # Add traces for each class
+    for i, cls in enumerate(counts.index):
+        fig_area.add_trace(go.Scatter(
+            x=available_years,
+            y=class_years.get(cls, [0]*len(available_years)),
+            mode='lines',
+            name=cls,
+            line=dict(width=0.5, color=colors[i % len(colors)]),
+            fill='tonexty',  # fills area between traces
+            stackgroup='one'  # create stacked area
+        ))
+
+    # Customize layout
+    fig_area.update_layout(
+        title='Building Class Distribution by Year',
+        xaxis_title='Year',
+        yaxis_title='Number of Buildings',
+        template='plotly_white',
+        height=500,
+        hovermode='x unified'
+    )
+
+    st.plotly_chart(fig_area, use_container_width=True)
+
+    # 6) Class Proportions - Pie Charts Comparison
+    st.subheader("Building Class Proportion Comparison")
+
+    # Create a row of pie charts, one for each year
+    chart_cols = st.columns(len(available_years))
+
+    for i, year in enumerate(available_years):
+        with chart_cols[i]:
+            year_data = counts[year] if year in counts.columns else pd.Series(0, index=counts.index)
+            
+            # Create pie chart
+            fig_pie = go.Figure(data=[go.Pie(
+                labels=year_data.index,
+                values=year_data.values,
+                hole=.4,
+                marker_colors=colors[:len(year_data)]
+            )])
+            
+            fig_pie.update_layout(
+                title=f'{year} Distribution',
+                height=400,
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=-0.2,
+                    xanchor="center",
+                    x=0.5
+                )
+            )
+            
+            st.plotly_chart(fig_pie, use_container_width=True)
     
 st.markdown("""
     <div style="text-align: center; margin-top: 30px; padding: 10px; background-color: #f1f3f4; border-radius: 5px;">

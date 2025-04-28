@@ -1,174 +1,182 @@
-/* General Styles */
-body {
-    font-family: 'Arial', sans-serif;
-    background-color: #f5f5f5;
-    color: #333;
+/* Modern Enterprise UI Styles */
+.main {
+    background-color: #f8f9fa;
 }
 
-/* Header Styles */
-h1, h2, h3, h4, h5, h6 {
-    color: #2c3e50;
-    font-weight: bold;
+.stApp {
+    max-width: 1800px;
+    margin: 0 auto;
 }
 
-h1 {
-    font-size: 2.5rem;
-    margin-bottom: 1rem;
-}
-
-h2 {
-    font-size: 2rem;
-    margin-bottom: 0.75rem;
-}
-
-h3 {
-    font-size: 1.75rem;
+.main-header {
+    background: linear-gradient(90deg, #0052a5, #0077cc);
+    color: white;
+    padding: 1.5rem;
+    border-radius: 0px;
     margin-bottom: 0.5rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
-/* Sidebar Styles */
-.css-1d391kg {
-    background-color: #2c3e50;
-    color: white;
-    padding: 1rem;
-    border-radius: 10px;
-}
-
-.css-1d391kg h2 {
-    color: white;
-}
-
-.css-1d391kg .stButton button {
-    background-color: #3498db;
-    color: white;
-    border-radius: 5px;
-    padding: 0.5rem 1rem;
-    font-weight: bold;
-    transition: background-color 0.3s ease;
-}
-
-.css-1d391kg .stButton button:hover {
-    background-color: #2980b9;
-}
-
-/* Slider Styles */
-.stSlider {
-    margin-bottom: 1.5rem;
-}
-
-.stSlider .css-1cpxqw2 {
-    background-color: #3498db;
-}
-
-.stSlider .css-1cpxqw2:hover {
-    background-color: #2980b9;
-}
-
-/* Button Styles */
-.stButton button {
-    background-color: #3498db;
-    color: white;
-    border-radius: 5px;
-    padding: 0.5rem 1rem;
-    font-weight: bold;
-    transition: background-color 0.3s ease;
-}
-
-.stButton button:hover {
-    background-color: #2980b9;
-}
-
-/* Table Styles */
-.stDataFrame {
-    border-radius: 10px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-}
-
-.stDataFrame th {
-    background-color: #2c3e50;
-    color: white;
-    font-weight: bold;
-}
-
-.stDataFrame tr:nth-child(even) {
-    background-color: #f5f5f5;
-}
-
-.stDataFrame tr:hover {
-    background-color: #e0e0e0;
-}
-
-/* Metric Cards */
-.stMetric {
+.card {
     background-color: white;
-    border-radius: 10px;
-    padding: 1rem;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    border-radius: 8px;
+    padding: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     margin-bottom: 1rem;
+    border: 1px solid #e0e0e0;
 }
 
-.stMetric h3 {
-    color: #3498db;
-    margin-bottom: 0.5rem;
+.metric-card {
+    text-align: center;
+    padding: 1rem;
+    border-radius: 6px;
+    background: white;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    border: 1px solid #e0e0e0;
+    transition: transform 0.2s;
 }
 
-.stMetric p {
-    font-size: 1.5rem;
-    font-weight: bold;
-    color: #2c3e50;
+.metric-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 3px 6px rgba(0,0,0,0.1);
+}
+.metric-card h2, 
+.metric-card h3, 
+.metric-card p {
+    color: #333 !important;
 }
 
-/* Tabs Styles */
-.stTabs {
-    margin-bottom: 1.5rem;
+/* Clean up layout */
+.css-1d391kg {
+    padding-top: 1rem;
 }
 
-.stTabs .stTab {
-    background-color: #3498db;
-    color: white;
-    border-radius: 5px;
-    padding: 0.5rem 1rem;
-    font-weight: bold;
-    transition: background-color 0.3s ease;
+/* Hide default Streamlit header and footer */
+#MainMenu, footer {visibility: hidden;}
+
+/* Custom tabs */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 4px;
 }
 
-.stTabs .stTab:hover {
-    background-color: #2980b9;
-}
-
-/* Tooltip Styles */
-.stTooltip {
-    background-color: #2c3e50;
-    color: white;
-    border-radius: 5px;
-    padding: 0.5rem;
+.stTabs [data-baseweb="tab"] {
+    height: 40px;
+    white-space: nowrap;
+    background-color: #f1f3f4;
+    border-radius: 4px 4px 0 0;
+    padding: 0 16px;
+    font-weight: 500;
     font-size: 0.9rem;
 }
 
-/* Progress Bar Styles */
-.stProgress {
-    margin-bottom: 1.5rem;
+.stTabs [aria-selected="true"] {
+    background-color: #0077cc !important;
+    color: black !important;
 }
 
-.stProgress .css-1cpxqw2 {
-    background-color: #3498db;
-}
-
-/* Footer Styles */
-footer {
-    text-align: center;
+/* Filter panel styling */
+.filter-panel {
+    background-color: white;
     padding: 1rem;
-    background-color: #2c3e50;
-    color: white;
-    margin-top: 2rem;
-    border-radius: 10px;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    border: 1px solid #e0e0e0;
 }
 
-footer a {
-    color: #3498db;
-    text-decoration: none;
+/* Larger map container */
+.map-container {
+    height: 600px;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin-bottom: 1rem;
 }
 
-footer a:hover {
-    text-decoration: underline;
+/* Compact form elements */
+.stSlider, .stSelectbox, .stTextInput {
+    margin-bottom: 0.5rem;
+}
+
+/* Status bar */
+.status-bar {
+    background-color: #f1f3f4;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+}
+
+/* Full screen map container */
+.full-map-container {
+    position: relative;
+    height: 100vh;
+    width: 100%;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+}
+
+/* Slide-in panel styling */
+.slide-panel {
+    position: absolute;
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.2);
+    padding: 15px;
+    transition: transform 0.3s ease-in-out;
+    z-index: 1000;
+    max-height: 85vh;
+    overflow-y: auto;
+}
+
+.slide-panel-left {
+    left: 0;
+    top: 0;
+    width: 300px;
+    height: 100%;
+    transform: translateX(-100%);
+}
+
+.slide-panel-right {
+    right: 0;
+    top: 0;
+    width: 300px;
+    height: 100%;
+    transform: translateX(100%);
+}
+
+.slide-panel-visible-left {
+    transform: translateX(0);
+}
+
+.slide-panel-visible-right {
+    transform: translateX(0);
+}
+
+.panel-toggle {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 60px;
+    background-color: white;
+    border-radius: 0 8px 8px 0;
+    box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+    cursor: pointer;
+    z-index: 999;
+}
+
+.panel-toggle-left {
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.panel-toggle-right {
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    border-radius: 8px 0 0 8px;
 }
