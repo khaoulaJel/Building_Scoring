@@ -42,240 +42,201 @@ load_css("styles.css")
 # App header with gradient
 st.markdown('<div class="main-header"><h1 style="text-align: center;"> Building Analytics Dashboard</h1></div>', unsafe_allow_html=True)
 
+# ──────────────────────────────────────────────────────────────
 # Initialize session state for comparison
+# ──────────────────────────────────────────────────────────────
 if 'comparison_buildings' not in st.session_state:
     st.session_state['comparison_buildings'] = []
 
-
-# Sidebar configuration
+# ──────────────────────────────────────────────────────────────
+# Sidebar configuration (replaces the old block)
+# ──────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("Dashboard Controls")
     
-    # Dataset selection
+    # 1) Dataset selection
     st.header("📊 Dataset Selection")
     dataset_option = st.selectbox(
         "Choose Dataset",
         ["Default (Lyon)", "Gordes", "Upload Custom Dataset"],
         key="dataset_option"
     )
-    
     uploaded_file = None
     if dataset_option == "Upload Custom Dataset":
         uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
     
-    # Load and validate dataset
     if dataset_option == "Default (Lyon)":
-        with st.spinner("Loading Lyon data..."):
-            df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
-            selected_city = "Lyon"
+        raw_path = "data/reduced_lyon_buildings_all_years.csv"
+        selected_city = "Lyon"
     elif dataset_option == "Gordes":
-        with st.spinner("Loading Gordes data..."):
-            try:
-                df = pd.read_csv("data/reduced_gordes_buildings_all_years.csv")
-                selected_city = "Gordes"
-            except FileNotFoundError:
-                st.error("Gordes dataset file 'data/reduced_gordes_buildings_all_years.csv' not found.")
-                df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
-                selected_city = "Lyon"
-                st.warning("Reverted to default Lyon dataset")
-                st.write(f"Fallback dataset: {selected_city}")  # Debug
-    else:  # Upload Custom Dataset
-        if uploaded_file is not None:
-            with st.spinner("Loading uploaded dataset..."):
-                try:
-                    df = pd.read_csv(uploaded_file)
-                    selected_city = "Custom Dataset"
-                except Exception as e:
-                    st.error(f"Error loading CSV file: {str(e)}")
-                    df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
-                    selected_city = "Lyon"
-                    st.warning("Reverted to default Lyon dataset")
-                    st.write(f"Fallback dataset: {selected_city}")  # Debug
-        else:
+        raw_path = "data/reduced_gordes_buildings_all_years.csv"
+        selected_city = "Gordes"
+    else:
+        if uploaded_file is None:
             st.info("Please upload a CSV file to proceed.")
-            df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
-            selected_city = "Lyon"
-            st.write(f"Using default dataset: {selected_city}")  # Debug
-            
-    # Scoring basis
+            st.stop()
+        raw_path = uploaded_file
+        selected_city = "Custom Dataset"
+    
+    with st.spinner(f"Loading {selected_city} data..."):
+        df_raw = pd.read_csv(raw_path)
+    
+    # 2) Analysis year selector
+    years = sorted(df_raw["year"].dropna().unique())
+    analysis_year = st.selectbox("Analysis Year", years, index=len(years)-1)
+    
+    # 3) Scoring basis
     st.subheader("Scoring Basis")
     scoring_basis = st.radio(
         "Choose scoring basis",
         ["Total (kWh)", "Per m² (kWh/m²/year)"]
     )
+    
+    # 4) Validate & preprocess full dataset
+    df_all = validate_and_preprocess_dataset(df_raw, scoring_basis)
+    if df_all is None:
+        st.error("Data validation failed. Please check your dataset.")
+        st.stop()
+    
+    # 5) Slice to the selected year for tabs 1–5
+    # 5) Create both full and year-filtered datasets
+    df_all_years = df_all.copy()  # Keep all years for Tab6
+    df = df_all[df_all["year"] == analysis_year].copy()  # Filtered for other tabs
+    if df.empty:
+        st.error(f"No data available for the year {analysis_year}.")
+        st.stop()
 
-    # Validate and preprocess dataset
-    df = validate_and_preprocess_dataset(df, scoring_basis)
-    if df is None:
-        df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
-        selected_city = "Lyon"
-        st.warning("Invalid dataset. Reverted to default Lyon dataset")
-        df = validate_and_preprocess_dataset(df, scoring_basis)
-
-    # Replace metrics for intensity‐based scoring
+    # Then store both in session state:
+    st.session_state["df"] = df  # For tabs 1-5
+    st.session_state["df_all_years"] = df_all_years  # For Tab6
+        
+    # 6) Intensity‐based scoring swap
     if scoring_basis == "Per m² (kWh/m²/year)":
         if "Energy_Intensity" in df.columns and "CO2_Intensity" in df.columns:
             df["Energy_Consumption"] = df["Energy_Intensity"]
-            df["CO2_Usage"] = df["CO2_Intensity"]
-
+            df["CO2_Usage"]          = df["CO2_Intensity"]
+    
+    # 7) Classification Features
     st.subheader("Classification Features")
-    available_features = [
+    base_feats = [
         "Energy_Consumption", "CO2_Usage", "Water_Usage",
         "Energy_Intensity", "CO2_Intensity"
     ]
-    available_features = [f for f in available_features if f in df.columns]
-
+    available_features = [f for f in base_feats if f in df.columns]
     selected_features = st.multiselect(
         "Select Features for Classification",
         options=available_features,
-        default=["Energy_Consumption", "CO2_Usage"],
-        # no max_selections → user can pick as many as they want
-        key="classification_features"
+        default=["Energy_Consumption", "CO2_Usage"]
     )
-
-    # enforce at least one feature
-    if len(selected_features) < 1:
-        st.error("Please select at least one feature for classification.")
+    if not selected_features:
+        st.error("Please select at least one feature.")
         st.stop()
-
-
-    # Cache in session state
-    st.session_state["df"]   = df
-    st.session_state["city"] = selected_city
-
-    # Classification method selection
+    
+    # 8) Analysis Method
     st.header("Analysis Method")
-    classification_methods = {
-        "Euclidean Distance"    : "Euclidean Distance",
-        "Mahalanobis Distance"  : "Mahalanobis Distance",
-        "PCA Classification"    : "PCA Classification",
-        "Weighted Classification": "Weighted Classification",
-        "Bayesian Classification": "Bayesian Classification"
-    }
-
     classification_method = st.radio(
         "Select Classification Method",
-        options=list(classification_methods.keys()),
-        format_func=lambda x: classification_methods[x]
+        [
+            "Euclidean Distance", "Mahalanobis Distance",
+            "PCA Classification", "Weighted Classification",
+            "Bayesian Classification"
+        ]
     )
     
     weights = None
     if classification_method == "Weighted Classification":
         st.subheader("Enter weights for each feature")
-        weights = []
-        # Show a number_input for each selected feature:
-        for feat in selected_features:
-            w = st.number_input(
+        weights = [
+            st.number_input(
                 f"Weight for {feat}",
-                min_value=0.0, 
-                max_value=1.0, 
+                min_value=0.0, max_value=1.0,
                 value=round(1/len(selected_features), 2),
-                step=0.01,
-                key=f"weight_{feat}"
+                step=0.01
             )
-            weights.append(w)
-        # Pass the user's list straight into add_classifications
+            for feat in selected_features
+        ]
+    
+    # 9) Run classification on this one-year slice
     df = add_classifications(df, features=selected_features, weights=weights)
-        
-    # Apply selected classification
     with st.spinner(f"Applying {classification_method}..."):
-        class_column_mapping = {
-            "Euclidean Distance": "class_euclidean",
-            "Mahalanobis Distance": "class_mahalanobis",
-            "PCA Classification": "class_pca",
-            "Weighted Classification": "class_weighted",
-            "Bayesian Classification": "class_bayesian"
-        }
-        selected_class_column = class_column_mapping[classification_method]
-        
-        # Apply the selected classification method
         if classification_method == "Euclidean Distance":
             from models.euclidean import classify_euclidean
-            df = classify_euclidean(df, features=selected_features)
+            df = classify_euclidean(df, selected_features)
+            class_col = "class_euclidean"
         elif classification_method == "Mahalanobis Distance":
             from models.mahalanobis import classify_mahalanobis
-            df = classify_mahalanobis(df, features=selected_features, return_distance=True)
+            df = classify_mahalanobis(df, selected_features, return_distance=True)
+            class_col = "class_mahalanobis"
         elif classification_method == "PCA Classification":
             from models.pca import classify_pca
-            df = classify_pca(df, features=selected_features)
+            df = classify_pca(df, selected_features)
+            class_col = "class_pca"
         elif classification_method == "Weighted Classification":
             from models.weighted import classify_weighted
-            df = classify_weighted(df, features=selected_features, weights=weights)
-        elif classification_method == "Bayesian Classification":
-            from models.bayesian import classify_bayesian
-            df = classify_bayesian(df, features=selected_features)
-        
-        # Assign class_label from the mapped column
-        if selected_class_column in df.columns:
-            df["class_label"] = df[selected_class_column]
+            df = classify_weighted(df, selected_features, weights=weights)
+            class_col = "class_weighted"
         else:
-            st.error(f"Column '{selected_class_column}' not found after classification. Check the classification function.")
-            st.stop()
-        
-        # Cache updated DataFrame
-        st.session_state["df"] = df
-        
+            from models.bayesian import classify_bayesian
+            df = classify_bayesian(df, selected_features)
+            class_col = "class_bayesian"
+    
+        # Add class_label to all years
+    df_all["class_label"] = df_all[class_col]
 
-# Check if empty
-if df.empty:
-    st.error("No data available. Please check your dataset.")
-    st.stop()
-# Advanced filters in an expander
+    # Then create the year-filtered version
+    df = df_all[df_all["year"] == analysis_year].copy()
+
+# Store both in session state
+    st.session_state["df"] = df  # For tabs 1-5
+    st.session_state["df_all_years"] = df_all  # For tab6
+    st.session_state["df"]   = df
+    st.session_state["df_all"] = df_all
+    st.session_state["city"] = selected_city
+    st.session_state["year"] = analysis_year
+
+# ──────────────────────────────────────────────────────────────
+# Advanced filters (unchanged – operates on st.session_state["df"])
+# ──────────────────────────────────────────────────────────────
+df = st.session_state["df"]
 with st.expander("🔍 Advanced Filters", expanded=False):
     col1, col2 = st.columns(2)
-    
     with col1:
         co2_min, co2_max = st.slider(
-            "CO₂ Usage (kg)", 
-            float(df["CO2_Usage"].min()), 
-            float(df["CO2_Usage"].max()), 
+            "CO₂ Usage (kg)",
+            float(df["CO2_Usage"].min()), float(df["CO2_Usage"].max()),
             (float(df["CO2_Usage"].min()), float(df["CO2_Usage"].max()))
         )
-        
         water_min, water_max = st.slider(
-            "Water Usage (L)", 
-            float(df["Water_Usage"].min()), 
-            float(df["Water_Usage"].max()), 
+            "Water Usage (L)",
+            float(df["Water_Usage"].min()), float(df["Water_Usage"].max()),
             (float(df["Water_Usage"].min()), float(df["Water_Usage"].max()))
         )
-    
     with col2:
         energy_min, energy_max = st.slider(
-            "Energy (kWh)", 
-            float(df["Energy_Consumption"].min()), 
-            float(df["Energy_Consumption"].max()), 
+            "Energy (kWh)",
+            float(df["Energy_Consumption"].min()), float(df["Energy_Consumption"].max()),
             (float(df["Energy_Consumption"].min()), float(df["Energy_Consumption"].max()))
         )
-        
-    
-    # Class filter with colored chips
     st.subheader("Building Class Filter")
-    all_classes = ['A', 'B', 'C', 'D', 'E', 'F']
-    class_colors = {
-        'A': '#28a745', 'B': '#5cb85c', 'C': '#ffc107',
-        'D': '#fd7e14', 'E': '#dc3545', 'F': '#6c757d'
-    }
-    
+    all_classes = ['A','B','C','D','E','F']
     class_cols = st.columns(6)
     selected_classes = []
-    
     for i, cls in enumerate(all_classes):
         with class_cols[i]:
             if st.checkbox(f"Class {cls}", value=True, key=f"class_{cls}"):
                 selected_classes.append(cls)
-    
     color_by = st.selectbox(
-        "Color Buildings By", 
-        ["class_label", "CO2_Usage", "Water_Usage", "Energy_Consumption"],
+        "Color Buildings By",
+        ["class_label","CO2_Usage","Water_Usage","Energy_Consumption"],
         format_func=lambda x: {
-            "class_label": "Energy Class",
-            "CO2_Usage": "CO₂ Emissions",
-            "Water_Usage": "Water Consumption",
-            "Energy_Consumption": "Energy Usage",
-        }.get(x, x)
+            "class_label":"Energy Class","CO2_Usage":"CO₂ Emissions",
+            "Water_Usage":"Water Consumption","Energy_Consumption":"Energy Usage"
+        }[x]
     )
 
-# Filter the dataframe
+# ──────────────────────────────────────────────────────────────
+# Filtered DataFrame for main tabs
+# ──────────────────────────────────────────────────────────────
 filtered_df = df[
     (df["CO2_Usage"] >= co2_min) & (df["CO2_Usage"] <= co2_max) &
     (df["Water_Usage"] >= water_min) & (df["Water_Usage"] <= water_max) &
@@ -284,32 +245,36 @@ filtered_df = df[
 ]
 
 # Info bar
-col1, col2, col3 = st.columns([2, 2, 1])
+col1, col2, col3 = st.columns([2,2,1])
 with col1:
-    st.info(f" Showing {len(filtered_df)} of {len(df)} buildings in {selected_city}")
+    st.info(f"Showing {len(filtered_df)} of {len(df)} buildings in {selected_city}")
 with col2:
-    st.metric(
-        "Average Energy Class", 
-        f"{filtered_df['class_label'].mode()[0] if not filtered_df.empty else 'N/A'}",
-        delta=None
-    )
+    st.metric("Average Energy Class",
+              filtered_df['class_label'].mode()[0] if not filtered_df.empty else "N/A")
 with col3:
-    st.metric(
-        "Data Last Updated", 
-        datetime.now().strftime("%Y-%m-%d"),
-        delta=None
-    )
+    st.metric("Data Last Updated",
+              datetime.now().strftime("%Y-%m-%d"))
 
-tab1, tab2, tab3, tab4, tab5,tab6,tab7 = st.tabs([
-    "Interactive Map", 
-    "Analytics & Insights", 
-    "Building Data", 
+# ──────────────────────────────────────────────────────────────
+# Tabs (unchanged – follow immediately after)
+# ──────────────────────────────────────────────────────────────
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "Interactive Map",
+    "Analytics & Insights",
+    "Building Data",
     "Export & Reports",
     "City Statistics",
     "Year-over-Year Comparison",
     "Compare Cities"
 ])
-
+class_colors = {
+    'A': '#28a745',
+    'B': '#5cb85c',
+    'C': '#ffc107',
+    'D': '#fd7e14',
+    'E': '#dc3545',
+    'F': '#6c757d'
+}
 
 with tab1:
     if not filtered_df.empty:
@@ -389,7 +354,6 @@ with tab2:
             display_distribution_plot(filtered_df, color_by)
             
             # Class metrics
-            st.markdown("### Class Breakdown")
             class_counts = filtered_df["class_label"].value_counts().reset_index()
             class_counts.columns = ["Class", "Count"]
             
@@ -648,125 +612,166 @@ with tab5:
     else:
         st.info("No intensity columns found; showing consumption only.")
 
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+
 with tab6:
-    st.header("📊 Year-over-Year Comparison (2024 vs 2025)")
+    st.header("📊 Year-over-Year Comparison")
+    st.markdown("This section dynamically compares the earliest and latest years in your dataset and shows trends across all years.")
 
-    # 1) Class counts by year
-    counts = df.groupby(["class_label", "year"]).size().unstack(fill_value=0)
-    st.subheader("Building Counts by Class and Year")
-    st.dataframe(counts.style.format("{:,}"))
+    # Get the full dataset from session state
+    df_all_years = st.session_state.get("df_all_years", None)
+    if df_all_years is None:
+        st.error("Year-over-year data not available. Please check your dataset.")
+        st.stop()
 
-    # 2) Bar chart (Plotly)
-    import plotly.graph_objects as go
-    fig = go.Figure([
-        go.Bar(name="2024", x=counts.index, y=counts[2024]),
-        go.Bar(name="2025", x=counts.index, y=counts[2025]),
-    ])
-    fig.update_layout(
-        barmode="group",
-        xaxis_title="Class",
-        yaxis_title="Count of Buildings",
-        legend_title="Year",
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    # Ensure class_label exists (apply same classification to all years)
+    if "class_label" not in df_all_years.columns:
+        # You'll need to apply your classification method to the full dataset
+        # This should mirror what you do in the sidebar
+        df_all_years = add_classifications(df_all_years, 
+                                         features=selected_features, 
+                                         weights=weights)
+        # Apply the selected classification method to all years
+        # (Same logic as in your sidebar)
 
-    # 3) Delta per class
-    delta = counts[2025] - counts[2024]
-    pct  = (delta / counts[2024] * 100).fillna(0)
-    delta_df = pd.DataFrame({
-        "Class":        counts.index,
-        "Δ Count":      delta.values,
-        "Δ %":          pct.values
-    })
-    st.subheader("Change in Counts (2025 – 2024)")
-    st.dataframe(delta_df.style.format({"Δ Count":"{:+,}","Δ %":"{:+.1f}%"}), use_container_width=True)
+    # --- Dynamically discover years ---
+    years = sorted(df_all_years["year"].unique())
+    if len(years) < 2:
+        st.error("Need at least 2 years of data for comparison")
+        st.stop()
+        
+    first_year, last_year = years[0], years[-1]
 
-    # 4) Summary metrics
-    tot2024 = len(df[df.year == 2024])
-    tot2025 = len(df[df.year == 2025])
-    totΔ     = tot2025 - tot2024
-    avg_cons = df.groupby("year")["Energy_Consumption"].mean()
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Buildings 2024", f"{tot2024:,}")
-    c2.metric("Total Buildings 2025", f"{tot2025:,}", delta=f"{totΔ:+,}")
-    c3.metric("Avg Energy 2024", f"{avg_cons.get(2024,0):.1f} kWh")
-    c4.metric("Avg Energy 2025", f"{avg_cons.get(2025,0):.1f} kWh",
-             delta=f"{(avg_cons.get(2025,0)-avg_cons.get(2024,0)):+.1f} kWh")
+    # --- Filter to those two for direct comparison ---
+    df_first = df_all_years[df_all_years.year == first_year]
+    df_last = df_all_years[df_all_years.year == last_year]
     
-    # 5) Class Comparison Over Years - Area Chart Only
-    st.subheader("Building Class Distribution Evolution")
+    # --- Core KPIs ---
+    total_first = len(df_first)
+    total_last = len(df_last)
+    Δ_total = total_last - total_first
+    pct_total = (Δ_total / total_first * 100) if total_first else 0
 
-    # Get unique years dynamically from the dataframe
-    available_years = sorted(df['year'].unique())
+    avg_e_first = df_first["Energy_Consumption"].mean()
+    avg_e_last = df_last["Energy_Consumption"].mean()
+    Δ_energy = avg_e_last - avg_e_first
+    pct_energy = (Δ_energy / avg_e_first * 100) if avg_e_first else 0
 
-    # Prepare data for stacked area chart
-    class_years = {}
-    for year in available_years:
-        for cls in counts.index:
-            if year in counts.columns:
-                class_years.setdefault(cls, []).append(counts.loc[cls, year] if cls in counts.index else 0)
-
-    # Create stacked area chart showing class breakdown over years
-    fig_area = go.Figure()
-
-    # Colors for consistency
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
-
-    # Add traces for each class
-    for i, cls in enumerate(counts.index):
-        fig_area.add_trace(go.Scatter(
-            x=available_years,
-            y=class_years.get(cls, [0]*len(available_years)),
-            mode='lines',
-            name=cls,
-            line=dict(width=0.5, color=colors[i % len(colors)]),
-            fill='tonexty',  # fills area between traces
-            stackgroup='one'  # create stacked area
-        ))
-
-    # Customize layout
-    fig_area.update_layout(
-        title='Building Class Distribution by Year',
-        xaxis_title='Year',
-        yaxis_title='Number of Buildings',
-        template='plotly_white',
-        height=500,
-        hovermode='x unified'
+    # --- Class-by-year counts for trend & delta ---
+    # First ensure we have the counts in the right format
+    counts = df_all_years.groupby(["class_label", "year"]).size().unstack(fill_value=0)
+    
+    # Verify the years exist in the counts columns
+    if first_year not in counts.columns or last_year not in counts.columns:
+        st.error("Missing year data in the counts table")
+        st.stop()
+        
+    delta = counts[last_year] - counts[first_year]
+    pct_cls = (delta / counts[first_year] * 100).replace([np.inf, -np.inf], 0).fillna(0)
+    
+    delta_df = (
+        pd.DataFrame({
+            "Class": counts.index,
+            f"{first_year}": counts[first_year],
+            f"{last_year}": counts[last_year],
+            "Δ Count": delta,
+            "Δ %": pct_cls
+        })
+        .sort_values("Δ %", ascending=False)
     )
 
+    # --- Extract top/bottom classes ---
+    top = delta_df.iloc[0]
+    bot = delta_df.iloc[-1]
+
+
+    # --- KPI Row ---
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(f"🏢 Total Buildings ({last_year})", f"{total_last:,}",
+              delta=f"{Δ_total:+,} ({pct_total:.1f}%)")
+    c2.metric(f"⚡ Avg Energy ({last_year})", f"{avg_e_last:.1f} kWh",
+              delta=f"{Δ_energy:+.1f} kWh ({pct_energy:.1f}%)")
+    c3.metric("🚀 Fastest Growth Class", top["Class"],
+              delta=f"{top['Δ %']:+.1f}%")
+    c4.metric("🐌 Slowest Growth Class", bot["Class"],
+              delta=f"{bot['Δ %']:+.1f}%")
+
+    st.markdown("---")
+
+    # --- 1) Trend Across All Years (Stacked Area) ---
+    st.subheader("Evolution of Building Counts by Class")
+    trend = counts.reset_index().melt(
+        id_vars="class_label", var_name="Year", value_name="Count"
+    )
+    fig_area = px.area(
+        trend,
+        x="Year", y="Count", color="class_label",
+        labels={"class_label": "Class"},
+        title=None
+    )
+    fig_area.update_layout(xaxis=dict(dtick=1), height=300, hovermode="x unified")
     st.plotly_chart(fig_area, use_container_width=True)
 
-    # 6) Class Proportions - Pie Charts Comparison
-    st.subheader("Building Class Proportion Comparison")
+    st.markdown("---")
 
-    # Create a row of pie charts, one for each year
-    chart_cols = st.columns(len(available_years))
+    # --- 2) Absolute & % Δ Between First & Last Year ---
+    st.subheader(f"Change from {first_year} to {last_year} by Class")
+    dfc = delta_df.copy()
+    dfc_sorted = dfc.sort_values("Δ Count", ascending=False)
 
-    for i, year in enumerate(available_years):
-        with chart_cols[i]:
-            year_data = counts[year] if year in counts.columns else pd.Series(0, index=counts.index)
-            
-            # Create pie chart
-            fig_pie = go.Figure(data=[go.Pie(
-                labels=year_data.index,
-                values=year_data.values,
-                hole=.4,
-                marker_colors=colors[:len(year_data)]
-            )])
-            
-            fig_pie.update_layout(
-                title=f'{year} Distribution',
-                height=400,
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=-0.2,
-                    xanchor="center",
-                    x=0.5
-                )
-            )
-            
-            st.plotly_chart(fig_pie, use_container_width=True)
+    fig_bar = go.Figure()
+    fig_bar.add_trace(go.Bar(
+        name="Δ Count",
+        x=dfc_sorted["Class"],
+        y=dfc_sorted["Δ Count"],
+        marker_color=["green" if v>0 else "red" for v in dfc_sorted["Δ Count"]],
+        text=dfc_sorted["Δ Count"].map("{:+,}".format),
+        textposition="outside"
+    ))
+    fig_bar.add_trace(go.Scatter(
+        name="% Δ",
+        x=dfc_sorted["Class"],
+        y=dfc_sorted["Δ %"],
+        mode="markers+text",
+        marker=dict(symbol="diamond", size=10, color="navy"),
+        text=dfc_sorted["Δ %"].map("{:+.1f}%".format),
+        textposition="top center",
+        yaxis="y2"
+    ))
+    fig_bar.update_layout(
+        barmode="group",
+        xaxis_title="Building Class",
+        yaxis_title="Absolute Change",
+        yaxis2=dict(title="% Change", overlaying="y", side="right"),
+        legend=dict(orientation="h", y=1.02, x=0.5),
+        height=350,
+        hovermode="x unified"
+    )
+    st.plotly_chart(fig_bar, use_container_width=True)
+
+    st.markdown("---")
+
+    # --- 3) Average Energy by Class (Grouped Bar) ---
+    st.subheader("Average Energy Consumption by Class")
+    energy_cls = df.groupby(["class_label", "year"])["Energy_Consumption"] \
+                   .mean().unstack(fill_value=0)
+    melt_eng = energy_cls.reset_index().melt(
+        id_vars="class_label", var_name="Year", value_name="AvgEnergy"
+    )
+    fig_eng = px.bar(
+        melt_eng,
+        x="class_label", y="AvgEnergy", color="Year",
+        barmode="group", text="AvgEnergy",
+        labels={"class_label":"Class", "AvgEnergy":"kWh"}
+    )
+    fig_eng.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+    fig_eng.update_layout(height=300, uniformtext_mode="hide")
+    st.plotly_chart(fig_eng, use_container_width=True)
+
 with tab7:
     import streamlit as st
     import pandas as pd
@@ -936,7 +941,7 @@ with tab7:
     csv = summ_df.to_csv().encode("utf-8")
     st.download_button("Download CSV", csv, f"city_compare_{latest}.csv", "text/csv")
 
-    
+
 
     
 st.markdown("""

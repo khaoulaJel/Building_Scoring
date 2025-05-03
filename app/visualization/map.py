@@ -3,91 +3,87 @@ import pandas as pd
 import numpy as np
 import pydeck as pdk
 
-def get_color_mapping(filtered_df, color_by):
+def get_color_mapping(filtered_df: pd.DataFrame, color_by: str) -> list:
     """
-    Get color mapping for buildings based on the selected attribute
-    
-    Args:
-        filtered_df (pd.DataFrame): Filtered dataframe with buildings
-        color_by (str): Column name to color by
-        
-    Returns:
-        list: List of colors for each building
+    Return a list of RGBA colors (length == len(filtered_df)).
     """
-    values = filtered_df[color_by]
-    
+    # 1) If we're coloring by class_label (A–F), use our dict + a default
     if color_by == "class_label":
         class_colors = {
-            'A': [0, 255, 0, 200],
-            'B': [144, 238, 144, 200],
-            'C': [255, 255, 0, 200],
-            'D': [255, 165, 0, 200],
-            'E': [255, 0, 0, 200],
-            'F': [139, 0, 0, 200]
+            "A": [0,   255,   0, 200],
+            "B": [144, 238, 144, 200],
+            "C": [255, 255,   0, 200],
+            "D": [255, 165,   0, 200],
+            "E": [255,   0,   0, 200],
+            "F": [139,   0,   0, 200],
         }
-        return filtered_df[color_by].map(class_colors).tolist()
+        # cast to str to drop any 'category' dtype
+        labels = filtered_df[color_by].astype(str)
+        # build one list per row, defaulting to grey if key missing
+        return [
+            class_colors.get(lbl, [128, 128, 128, 200])
+            for lbl in labels
+        ]
+
+    # 2) Otherwise, map numeric ranges to colors as before
     else:
-        min_val = values.min()
-        max_val = values.max()
+        vals = filtered_df[color_by]
+        min_val, max_val = vals.min(), vals.max()
+
         def map_to_color(val):
-            normalized = (val - min_val) / (max_val - min_val) if max_val > min_val else 0.5
-            if normalized > 0.8:
-                return [255, 0, 0, 200]
-            elif normalized > 0.5:
-                return [255, 165, 0, 200]
-            elif normalized > 0.3:
-                return [255, 255, 0, 200]
+            if max_val > min_val:
+                norm = (val - min_val) / (max_val - min_val)
             else:
-                return [0, 255, 0, 200]
-        return filtered_df[color_by].apply(map_to_color).tolist()
+                norm = 0.5
 
-def display_map(filtered_df, city_name, color_by):
-    """
-    Display a map of buildings colored by the selected attribute
-    
-    Args:
-        filtered_df (pd.DataFrame): Filtered dataframe with buildings
-        city_name (str): Name of the city
-        color_by (str): Column name to color by
-    """
-    if filtered_df.empty:
-        st.write("No buildings match the current filters.")
+            if norm > 0.8:
+                return [255,   0,   0, 200]
+            elif norm > 0.5:
+                return [255, 165,   0, 200]
+            elif norm > 0.3:
+                return [255, 255,   0, 200]
+            else:
+                return [0,   255,   0, 200]
+
+        return vals.apply(map_to_color).tolist()
+
+def display_map(filtered_df: pd.DataFrame, city_name: str, color_by: str):
+    required_cols = {"latitude", "longitude"}
+    if not required_cols.issubset(filtered_df.columns):
+        st.error(f"Dataframe missing columns: {required_cols - set(filtered_df.columns)}")
         return
-        
-    colors = get_color_mapping(filtered_df, color_by)
-    cdf = filtered_df.copy()
-    cdf["color"] = colors
 
-    # Define a ScatterplotLayer
-    building_layer = pdk.Layer(
+    if filtered_df.empty:
+        st.info("No buildings match the current filters.")
+        return
+
+    # Couleurs
+    filtered_df = filtered_df.copy()
+    filtered_df["color"] = get_color_mapping(filtered_df, color_by)
+
+    # Layer pydeck
+    layer = pdk.Layer(
         "ScatterplotLayer",
-        cdf,
-        id="buildings",
+        data=filtered_df,
         get_position=["longitude", "latitude"],
-        get_radius=30,
         get_fill_color="color",
+        get_radius=30,
         pickable=True,
+        id="buildings",
     )
 
     view_state = pdk.ViewState(
         latitude=filtered_df["latitude"].mean(),
         longitude=filtered_df["longitude"].mean(),
         zoom=14,
-        pitch=0,
     )
 
-    deck = pdk.Deck(
-        layers=[building_layer],
-        initial_view_state=view_state,
-        tooltip={
-            "text": (
-                "Building ID: {building_id}\n"
-                "Class: {class_label}\n"
-                "Height: {height}m\n"
-                "CO₂: {CO2_Usage}kg\n"
-                "Water: {Water_Usage}L\n"
-                "Energy: {Energy_Consumption}kWh"
-            )
-        }
+    tooltip_txt = (
+        "Building ID: {building_id}\n"
+        "Class: {class_label}\n"
+        "CO₂: {CO2_Usage} kg\n"
+        "Water: {Water_Usage} L\n"
+        "Energy: {Energy_Consumption} kWh"
     )
-    st.pydeck_chart(deck)
+
+    st.pydeck_chart(pdk.Deck(layers=[layer], initial_view_state=view_state, tooltip={"text": tooltip_txt}))

@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:latest
+    container_name: buildings-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: buildings_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata_buildings:/var/lib/postgresql/data
+
+  app:
+    build: .
+    container_name: building-dashboard
+    depends_on:
+      - db
+    environment:
+      DB_USER: postgres
+      DB_PASS: root
+      DB_HOST: db          
+      DB_PORT: 5432
+      DB_NAME: buildings_db
+    volumes:
+      - .:/app               
+    ports:
+      - "8501:8501"          
+    command: >
+      streamlit run main.py
+      --server.port=8501
+      --server.address=0.0.0.0
+
+volumes:
+  pgdata_buildings:

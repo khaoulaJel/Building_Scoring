@@ -44,6 +44,17 @@ parser.add_argument(
     help=("Optional weights for weighted classifier; must match length of --features. "
           "If omitted, equal weights are used.")
 )
+parser.add_argument(
+    "--binning",
+    choices=["quantile", "equal_width", "kmeans"],
+    default="quantile",
+    help=(
+        "How to slice the distance distribution for Euclidean classes:\n"
+        "  • quantile      → ~ equal number of buildings per class  (default)\n"
+        "  • equal_width   → original behaviour (may create empty classes)\n"
+        "  • kmeans        → cluster distances into N natural groups"
+    )
+)
 args = parser.parse_args()
 
 city = args.city
@@ -124,9 +135,10 @@ df['Mahalanobis_Distance']  = df_mah['Mahalanobis_Distance']
 
 # Euclidean
 df['class_euclidean'] = classify_euclidean(
-    df, features=features
+    df,
+    features=features,
+    binning=args.binning      # NEW ↓
 )['class_label']
-
 # PCA
 df['class_pca'] = classify_pca(
     df, features=features
