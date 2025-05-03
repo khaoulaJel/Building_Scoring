@@ -71,11 +71,14 @@ with st.sidebar:
     if dataset_option == "Default (Lyon)":
         with st.spinner("Loading Lyon data..."):
             df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
+            df = df[df["year"] == datetime.now().year]  # ✨ Keep only current year
             selected_city = "Lyon"
+
     elif dataset_option == "Gordes":
         with st.spinner("Loading Gordes data..."):
             try:
                 df = pd.read_csv("data/reduced_gordes_buildings_all_years.csv")
+                df = df[df["year"] == datetime.now().year]
                 selected_city = "Gordes"
             except FileNotFoundError:
                 st.error("Gordes dataset file 'data/reduced_gordes_buildings_all_years.csv' not found.")
@@ -88,16 +91,19 @@ with st.sidebar:
             with st.spinner("Loading uploaded dataset..."):
                 try:
                     df = pd.read_csv(uploaded_file)
+                    df = df[df["year"] == datetime.now().year]
                     selected_city = "Custom Dataset"
                 except Exception as e:
                     st.error(f"Error loading CSV file: {str(e)}")
                     df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
+                    df = df[df["year"] == datetime.now().year]
                     selected_city = "Lyon"
                     st.warning("Reverted to default Lyon dataset")
                     st.write(f"Fallback dataset: {selected_city}")  # Debug
         else:
             st.info("Please upload a CSV file to proceed.")
             df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
+            df = df[df["year"] == datetime.now().year]
             selected_city = "Lyon"
             st.write(f"Using default dataset: {selected_city}")  # Debug
             
@@ -426,25 +432,6 @@ with tab2:
         if not filtered_df.empty:
             display_relationship_plot(filtered_df, color_by)
             
-            # Correlation heatmap
-            st.markdown("### Correlation Analysis")
-            numeric_df = filtered_df.select_dtypes(include=[np.number])
-            corr = numeric_df.corr()
-            
-            fig = {
-                "data": [{
-                    "type": "heatmap",
-                    "z": corr.values,
-                    "x": corr.columns,
-                    "y": corr.columns,
-                    "colorscale": "Blues"
-                }],
-                "layout": {
-                    "title": "Feature Correlation Matrix",
-                    "height": 500
-                }
-            }
-            st.plotly_chart(fig, use_container_width=True)
 
 with tab3:
     # Building data
@@ -653,158 +640,178 @@ with tab5:
         st.info("No intensity columns found; showing consumption only.")
 
 with tab6:
-    st.header("📊 Year-over-Year Comparison (2024 vs 2025)")
+    st.header("📊 Year-over-Year Comparison")
 
-    # 1) Class counts by year
-    counts = df.groupby(["class_label", "year"]).size().unstack(fill_value=0)
+    # — 1) Reload and preprocess the full “all years” dataset —
+    df_all = pd.read_csv(CITY_PATHS[selected_city])
+    df_all = validate_and_preprocess_dataset(df_all, scoring_basis)
+    if df_all is None or df_all.empty:
+        st.error("Unable to load full historical data for year-over-year comparison.")
+        st.stop()
+
+    # — 2) Re-run classification on the full dataset —
+    # (so that we have a `class_label` column)
+    df_all = add_classifications(df_all, features=selected_features, weights=weights)
+    if classification_method == "Euclidean Distance":
+        from models.euclidean import classify_euclidean
+        df_all = classify_euclidean(df_all, features=selected_features)
+        col = "class_euclidean"
+    elif classification_method == "Mahalanobis Distance":
+        from models.mahalanobis import classify_mahalanobis
+        df_all = classify_mahalanobis(df_all, features=selected_features, return_distance=True)
+        col = "class_mahalanobis"
+    elif classification_method == "PCA Classification":
+        from models.pca import classify_pca
+        df_all = classify_pca(df_all, features=selected_features)
+        col = "class_pca"
+    elif classification_method == "Weighted Classification":
+        from models.weighted import classify_weighted
+        df_all = classify_weighted(df_all, features=selected_features, weights=weights)
+        col = "class_weighted"
+    else:  # Bayesian
+        from models.bayesian import classify_bayesian
+        df_all = classify_bayesian(df_all, features=selected_features)
+        col = "class_bayesian"
+
+    df_all["class_label"] = df_all[col]
+
+    # — 3) Compute counts by class and year —
+    counts = df_all.groupby(["class_label", "year"]).size().unstack(fill_value=0).sort_index(axis=1)
     st.subheader("Building Counts by Class and Year")
     st.dataframe(counts.style.format("{:,}"))
 
-    # 2) Bar chart (Plotly)
+    # — 4) Grouped bar chart for every year present —
     import plotly.graph_objects as go
-    fig = go.Figure([
-        go.Bar(name="2024", x=counts.index, y=counts[2024]),
-        go.Bar(name="2025", x=counts.index, y=counts[2025]),
-    ])
+    years_present = list(counts.columns)
+    bars = [go.Bar(name=str(yr), x=counts.index, y=counts[yr]) for yr in years_present]
+    fig = go.Figure(bars)
     fig.update_layout(
         barmode="group",
-        xaxis_title="Class",
-        yaxis_title="Count of Buildings",
+        xaxis_title="Energy Class",
+        yaxis_title="Number of Buildings",
         legend_title="Year",
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # 3) Delta per class
-    delta = counts[2025] - counts[2024]
-    pct  = (delta / counts[2024] * 100).fillna(0)
-    delta_df = pd.DataFrame({
-        "Class":        counts.index,
-        "Δ Count":      delta.values,
-        "Δ %":          pct.values
-    })
-    st.subheader("Change in Counts (2025 – 2024)")
-    st.dataframe(delta_df.style.format({"Δ Count":"{:+,}","Δ %":"{:+.1f}%"}), use_container_width=True)
+    # — 5) Year-over-year change between last two years (if available) —
+    if len(years_present) >= 2:
+        y0, y1 = years_present[-2], years_present[-1]
+        s0 = counts[y0]
+        s1 = counts[y1]
+        delta = s1 - s0
+        pct   = (delta.div(s0.replace({0: 1})) * 100).fillna(0)
 
-    # 4) Summary metrics
-    tot2024 = len(df[df.year == 2024])
-    tot2025 = len(df[df.year == 2025])
-    totΔ     = tot2025 - tot2024
-    avg_cons = df.groupby("year")["Energy_Consumption"].mean()
+        delta_df = pd.DataFrame({
+            "Class":           counts.index,
+            f"Δ Count ({y1}–{y0})": delta.values,
+            f"Δ % ({y1}–{y0})":     pct.values
+        })
+        st.subheader(f"Change in Counts ({y1} – {y0})")
+        st.dataframe(
+            delta_df.style.format({
+                f"Δ Count ({y1}–{y0})": "{:+,}",
+                f"Δ % ({y1}–{y0})":     "{:+.1f}%"
+            }),
+            use_container_width=True
+        )
+    else:
+        st.info("Not enough historical years to compute year-over-year change.")
+
+    # — 6) Summary metrics for first vs last year —
+    first_year, last_year = years_present[0], years_present[-1]
+    total_first = int(counts[first_year].sum())
+    total_last  = int(counts[last_year].sum())
+    total_diff  = total_last - total_first
+    avg_consumption = df_all.groupby("year")["Energy_Consumption"].mean()
+
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Buildings 2024", f"{tot2024:,}")
-    c2.metric("Total Buildings 2025", f"{tot2025:,}", delta=f"{totΔ:+,}")
-    c3.metric("Avg Energy 2024", f"{avg_cons.get(2024,0):.1f} kWh")
-    c4.metric("Avg Energy 2025", f"{avg_cons.get(2025,0):.1f} kWh",
-             delta=f"{(avg_cons.get(2025,0)-avg_cons.get(2024,0)):+.1f} kWh")
-    
-    # 5) Class Comparison Over Years - Area Chart Only
-    st.subheader("Building Class Distribution Evolution")
-
-    # Get unique years dynamically from the dataframe
-    available_years = sorted(df['year'].unique())
-
-    # Prepare data for stacked area chart
-    class_years = {}
-    for year in available_years:
-        for cls in counts.index:
-            if year in counts.columns:
-                class_years.setdefault(cls, []).append(counts.loc[cls, year] if cls in counts.index else 0)
-
-    # Create stacked area chart showing class breakdown over years
-    fig_area = go.Figure()
-
-    # Colors for consistency
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
-
-    # Add traces for each class
-    for i, cls in enumerate(counts.index):
-        fig_area.add_trace(go.Scatter(
-            x=available_years,
-            y=class_years.get(cls, [0]*len(available_years)),
-            mode='lines',
-            name=cls,
-            line=dict(width=0.5, color=colors[i % len(colors)]),
-            fill='tonexty',  # fills area between traces
-            stackgroup='one'  # create stacked area
-        ))
-
-    # Customize layout
-    fig_area.update_layout(
-        title='Building Class Distribution by Year',
-        xaxis_title='Year',
-        yaxis_title='Number of Buildings',
-        template='plotly_white',
-        height=500,
-        hovermode='x unified'
+    c1.metric(f"Total Buildings {first_year}", f"{total_first:,}")
+    c2.metric(f"Total Buildings {last_year}", f"{total_last:,}", delta=f"{total_diff:+,}")
+    c3.metric(f"Avg Energy {first_year}", f"{avg_consumption.get(first_year, 0):.1f} kWh")
+    c4.metric(
+        f"Avg Energy {last_year}",
+        f"{avg_consumption.get(last_year, 0):.1f} kWh",
+        delta=f"{(avg_consumption.get(last_year,0) - avg_consumption.get(first_year,0)):+.1f} kWh"
     )
 
+    # — 7) Stacked area chart showing class distribution over all years —
+    st.subheader("Building Class Distribution Evolution")
+    fig_area = go.Figure()
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+    for i, cls in enumerate(counts.index):
+        y_vals = [counts.at[cls, yr] for yr in years_present]
+        fig_area.add_trace(go.Scatter(
+            x=years_present,
+            y=y_vals,
+            mode="lines",
+            name=cls,
+            line=dict(width=0.5, color=colors[i % len(colors)]),
+            stackgroup="one"
+        ))
+    fig_area.update_layout(
+        title="Class Distribution by Year",
+        xaxis_title="Year",
+        yaxis_title="Buildings",
+        template="plotly_white",
+        height=450,
+        hovermode="x unified"
+    )
     st.plotly_chart(fig_area, use_container_width=True)
 
-    # 6) Class Proportions - Pie Charts Comparison
+    # — 8) Pie charts for each year’s class proportions —
     st.subheader("Building Class Proportion Comparison")
-
-    # Create a row of pie charts, one for each year
-    chart_cols = st.columns(len(available_years))
-
-    for i, year in enumerate(available_years):
-        with chart_cols[i]:
-            year_data = counts[year] if year in counts.columns else pd.Series(0, index=counts.index)
-            
-            # Create pie chart
+    pie_cols = st.columns(len(years_present))
+    for idx, yr in enumerate(years_present):
+        with pie_cols[idx]:
+            year_counts = counts[yr]
             fig_pie = go.Figure(data=[go.Pie(
-                labels=year_data.index,
-                values=year_data.values,
-                hole=.4,
-                marker_colors=colors[:len(year_data)]
+                labels=year_counts.index,
+                values=year_counts.values,
+                hole=0.4,
+                marker_colors=colors[:len(year_counts)]
             )])
-            
             fig_pie.update_layout(
-                title=f'{year} Distribution',
-                height=400,
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=-0.2,
-                    xanchor="center",
-                    x=0.5
-                )
+                title=f"{yr} Distribution",
+                height=350,
+                legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
             )
-            
             st.plotly_chart(fig_pie, use_container_width=True)
+
 with tab7:
-    import streamlit as st
     import pandas as pd
     import plotly.express as px
     import plotly.graph_objects as go
     from datetime import datetime
-    from models.euclidean import classify_euclidean
-    from models.mahalanobis import classify_mahalanobis
-    from models.pca import classify_pca
-    from models.weighted import classify_weighted
-    from models.bayesian import classify_bayesian
 
-    # --- Helper to load & classify (avoid hashing the function) ---
+    # — Helper to load & classify (no hashing on method_fn) —
     @st.cache_data(show_spinner=False)
-    def load_and_prepare(city_path, year, features, weights, _method_fn, col_name, sel_class, scoring_basis):
-        df = pd.read_csv(city_path)
+    def load_and_prepare(path, year, features, weights, _method_fn, col_name, sel_class, scoring_basis):
+        df = pd.read_csv(path)
         df = validate_and_preprocess_dataset(df, scoring_basis)
-        df = df[df.year == year]
+        df = df[df["year"] == year]
         df = add_classifications(df, features=features, weights=weights)
         df = _method_fn(df)
-        df['class_label'] = df[col_name]
+        df["class_label"] = df[col_name]
         if sel_class != "All":
-            df = df[df.class_label == sel_class]
+            df = df[df["class_label"] == sel_class]
         return df
 
-    # --- Controls ---
-    years      = sorted(pd.read_csv(CITY_PATHS[next(iter(CITY_PATHS))])['year'].unique())
-    sel_years  = st.multiselect("Snapshot Years", options=years, default=[datetime.now().year])
-    norm_opt   = st.radio("Metric Basis", ["Absolute (Total)", "Normalized (per m²)"])
-    sel_cities = st.multiselect("Cities to compare", list(CITY_PATHS), default=list(CITY_PATHS)[:2])
+    # — Controls —
+    years = sorted(pd.read_csv(CITY_PATHS[list(CITY_PATHS)[0]])["year"].unique())
+    current_year = datetime.now().year
+    idx = years.index(current_year) if current_year in years else 0
+    sel_year = st.selectbox("Select Year to Compare", years, index=idx)
+
+    sel_cities = st.multiselect(
+        "Cities to Compare",
+        options=list(CITY_PATHS.keys()),
+        default=list(CITY_PATHS.keys())[:2]
+    )
     if len(sel_cities) < 2:
-        st.info("Select at least two cities to compare.")
+        st.info("Please select at least two cities.")
         st.stop()
-    sel_class  = st.selectbox("Filter by Energy Class", ["All"] + list("ABCDEF"))
+
+    sel_class = st.selectbox("Filter by Energy Class (optional)", ["All"] + list("ABCDEF"))
 
     methods = {
         "Euclidean":   lambda d: classify_euclidean(d, features=selected_features),
@@ -824,127 +831,143 @@ with tab7:
     method_fn  = methods[sel_method]
     col_name   = cols_map[sel_method]
 
-    # --- Load & summarize each year ---
-    yearly_summaries = {}
-    yearly_city_dfs  = {}
-    for year in sel_years:
-        city_dfs = {}
-        for city in sel_cities:
-            df = load_and_prepare(
-                CITY_PATHS[city], year,
-                selected_features, weights,
-                method_fn, col_name,
-                sel_class, scoring_basis
-            )
-            if not df.empty:
-                city_dfs[city] = df
-        if len(city_dfs) >= 2:
-            yearly_city_dfs[year] = city_dfs
-            summary = []
-            for city, df in city_dfs.items():
-                e_col = "Energy_Consumption" if norm_opt=="Absolute (Total)" else "Energy_Intensity"
-                c_col = "CO2_Usage"
-                w_col = "Water_Usage"
-                summary.append({
-                    "City":     city,
-                    "AvgEnergy": df[e_col].mean(),
-                    "AvgCO2":    df[c_col].mean(),
-                    "AvgWater":  df[w_col].mean()
-                })
-            yearly_summaries[year] = pd.DataFrame(summary).set_index("City")
+    # — Load & prepare each city's data —
+    city_dfs = {}
+    for city in sel_cities:
+        dfc = load_and_prepare(
+            CITY_PATHS[city],
+            sel_year,
+            selected_features,
+            weights,
+            method_fn,
+            col_name,
+            sel_class,
+            scoring_basis
+        )
+        if not dfc.empty:
+            city_dfs[city] = dfc
 
-    if not yearly_summaries:
-        st.error("No valid data to compare."); st.stop()
+    if not city_dfs:
+        st.error(f"No data for {sel_year} with those filters.")
+        st.stop()
 
-    # --- Dashboard for the latest selected year ---
-    latest   = max(yearly_summaries)
-    summ_df  = yearly_summaries[latest]
-    city_dfs = yearly_city_dfs[latest]
+    # — Build summary DataFrame —
+    records = []
+    for city, dfc in city_dfs.items():
+        e_col = "Energy_Consumption" if scoring_basis == "Total (kWh)" else "Energy_Intensity"
+        records.append({
+            "City": city,
+            "Total Buildings": len(dfc),
+            "Avg Energy (kWh)": dfc[e_col].mean(),
+            "Avg CO₂ (kg)":     dfc["CO2_Usage"].mean(),
+            "Avg Water (L)":    dfc["Water_Usage"].mean()
+        })
+    summary_df = pd.DataFrame(records).set_index("City")
 
-    # 1) Avg metrics
-    st.subheader(f"🏆 {latest} Avg Metrics")
-    cols = st.columns(len(summ_df))
-    for (city, row), col in zip(summ_df.iterrows(), cols):
-        col.subheader(city)
-        col.metric("⚡ Energy", f"{row.AvgEnergy:.1f} kWh")
-        col.metric("🌱 CO₂",    f"{row.AvgCO2:.1f} kg")
-        col.metric("💧 Water",  f"{row.AvgWater:.1f} L")
-
-    # 2) Energy class distribution
-    st.subheader(f"🏷️ {latest} Class Distribution")
-    dist = (
-        pd.concat([df.class_label.value_counts(normalize=True)*100 for df in city_dfs.values()], axis=1)
-          .fillna(0)
-    )
-    dist.columns = sel_cities
-    dist = dist.T.reset_index().melt(id_vars="index", var_name="Class", value_name="Pct")
-    dist.rename(columns={"index":"City"}, inplace=True)
-    fig1 = px.bar(dist, x="City", y="Pct", color="Class", barmode="stack", text_auto=".1f")
-    fig1.update_layout(yaxis_title="%", height=350)
-    st.plotly_chart(fig1, use_container_width=True)
-
-    # 3) Radar chart
-    st.subheader("📊 Multivariate Radar Chart")
-    fig_radar = go.Figure()
-    for city, row in summ_df.iterrows():
-        fig_radar.add_trace(go.Scatterpolar(
-            r=[row.AvgEnergy, row.AvgCO2, row.AvgWater],
-            theta=["Energy","CO₂","Water"],
-            name=city,
-            fill="toself"
-        ))
-    fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True)), showlegend=True, height=450)
-    st.plotly_chart(fig_radar, use_container_width=True)
-
-    # 4) Indexed Year-on-Year Change (Base = first selected year → 100)
-    # 4) Yearly Average Trends (raw values)
-    st.subheader("📈 Yearly Average Trends")
-
-    trend_list = []
-    for yr, city_dfs in yearly_city_dfs.items():
-        for city, df in city_dfs.items():
-            e_col = "Energy_Consumption" if norm_opt=="Absolute (Total)" else "Energy_Intensity"
-            c_col = "CO2_Usage"         if norm_opt=="Absolute (Total)" else "CO2_Intensity"
-            w_col = "Water_Usage"       # always use absolute for now
-
-            trend_list.append({"Year": yr, "City": city, "Metric": "Energy", "Value": df[e_col].mean()})
-            trend_list.append({"Year": yr, "City": city, "Metric": "CO₂",    "Value": df[c_col].mean()})
-            trend_list.append({"Year": yr, "City": city, "Metric": "Water",  "Value": df[w_col].mean()})
-
-    trend_df = pd.DataFrame(trend_list)
-
-    fig_trend = px.line(
-        trend_df,
-        x="Year", y="Value",
-        color="City",
-        facet_col="Metric",
-        facet_col_wrap=3,
-        markers=True,
-        title="Average Consumption by City Over Years"
-    )
-    # allow each facet to scale independently
-    fig_trend.update_yaxes(matches=None)
-    st.plotly_chart(fig_trend, use_container_width=True, height=600)
-
-
-    # 5) Key insights & export
-    st.subheader("💡 Key Insights")
-    best  = summ_df.AvgEnergy.idxmin()
-    worst = summ_df.AvgEnergy.idxmax()
+    # — Dashboard Title & Highlights —
+    st.markdown(f"## City Comparison for {sel_year}")
+    best = summary_df["Avg Energy (kWh)"].idxmin()
+    worst = summary_df["Avg Energy (kWh)"].idxmax()
     st.markdown(
-        f"- **{best}** has the lowest avg energy in {latest} ({summ_df.loc[best,'AvgEnergy']:.1f} kWh).\n"
-        f"- **{worst}** has the highest avg energy ({summ_df.loc[worst,'AvgEnergy']:.1f} kWh)."
+        f"- 🔥 **Lowest average energy**: {best} ({summary_df.loc[best,'Avg Energy (kWh)']:.1f} kWh)\n"
+        f"- ❄️ **Highest average energy**: {worst} ({summary_df.loc[worst,'Avg Energy (kWh)']:.1f} kWh)"
     )
+    st.markdown("---")
 
-    st.subheader("📥 Export Summary")
-    csv = summ_df.to_csv().encode("utf-8")
-    st.download_button("Download CSV", csv, f"city_compare_{latest}.csv", "text/csv")
+    # — Metric Cards: Total buildings + averages —
+    st.subheader("🏆 Key Metrics by City")
+    metric_cols = st.columns(len(summary_df))
+    for (city, row), col in zip(summary_df.iterrows(), metric_cols):
+        col.markdown(f"**{city}**")
+        col.metric("🏘️ Total Buildings", f"{row['Total Buildings']:,}")
+        col.metric("⚡ Avg Energy",      f"{row['Avg Energy (kWh)']:.1f}")
+        col.metric("🌱 Avg CO₂",         f"{row['Avg CO₂ (kg)']:.1f}")
+        col.metric("💧 Avg Water",       f"{row['Avg Water (L)']:.1f}")
 
+    st.markdown("---")
+
+    # — Two-column charts: Grouped bar + Radar —
+    left, right = st.columns(2)
+
+    with left:
+        st.subheader("📊 Multimetric Bar Chart")
+        melt = summary_df.reset_index().melt(
+            id_vars="City",
+            value_vars=["Avg Energy (kWh)", "Avg CO₂ (kg)", "Avg Water (L)"],
+            var_name="Metric",
+            value_name="Value"
+        )
+        fig_bar = px.bar(
+            melt,
+            x="City",
+            y="Value",
+            color="Metric",
+            barmode="group",
+            text_auto=".1f",
+            title="Avg Energy, CO₂ & Water"
+        )
+        fig_bar.update_layout(yaxis_title="Value", height=450)
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    with right:
+        st.subheader("📊 Multimetric Radar Chart")
+        radar = go.Figure()
+        for city, row in summary_df.iterrows():
+            radar.add_trace(go.Scatterpolar(
+                r=[row["Avg Energy (kWh)"], row["Avg CO₂ (kg)"], row["Avg Water (L)"]],
+                theta=["Energy","CO₂","Water"],
+                name=city,
+                fill="toself"
+            ))
+        radar.update_layout(
+            polar=dict(radialaxis=dict(visible=True, tickformat=".1f")),
+            showlegend=True,
+            height=450,
+            title="Radar: Energy vs CO₂ vs Water"
+        )
+        st.plotly_chart(radar, use_container_width=True)
+
+    st.markdown("---")
+
+    # — Class Distribution as percentage of each city's total —
+    st.subheader("🏷️ Class Distribution (%)")
+    dist = pd.DataFrame({
+        city: (dfc["class_label"].value_counts(normalize=True) * 100)
+        for city, dfc in city_dfs.items()
+    }).fillna(0)
+    dist.index.name = "Class"
+    dist = dist.reset_index().melt(id_vars="Class", var_name="City", value_name="Pct")
+    fig_dist = px.bar(
+        dist,
+        x="Class",
+        y="Pct",
+        color="City",
+        barmode="group",
+        text_auto=".1f",
+        title="Class Share in Each City"
+    )
+    fig_dist.update_layout(yaxis_title="%", height=400)
+    st.plotly_chart(fig_dist, use_container_width=True)
+
+    st.markdown("---")
+
+    # — Detailed Table for Stakeholders —
+    st.subheader("📋 Detailed Metrics Table")
+    st.dataframe(
+        summary_df.style.format({
+            "Total Buildings": "{:,}",
+            "Avg Energy (kWh)": "{:.1f}",
+            "Avg CO₂ (kg)":     "{:.1f}",
+            "Avg Water (L)":    "{:.1f}"
+        }),
+        use_container_width=True
+    )
     
+
 
     
 st.markdown("""
-    <div style="text-align: center; margin-top: 30px; padding: 10px; background-color: #262730; border-radius: 5px;">
-        <p style="margin: 0; color: #ffffff;">Building Analytics Dashboard • Created with ❤️ • Data updated: April 2025</p>
+    <div style="text-align: center; margin-top: 30px; padding: 10px; background-color: #f8f9fa; border-radius: 5px;">
+        <p style="margin: 0; color: #1a1a1a;">Building Analytics Dashboard • Created with ❤️ • Data updated: April 2025</p>
     </div>
 """, unsafe_allow_html=True)
