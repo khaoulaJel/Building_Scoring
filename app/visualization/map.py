@@ -25,21 +25,22 @@ def get_color_mapping(filtered_df, color_by):
             'E': [255, 0, 0, 200],
             'F': [139, 0, 0, 200]
         }
-        return filtered_df[color_by].map(class_colors).tolist()
+        return [class_colors[cls] if cls in class_colors else [128, 128, 128, 200] for cls in values]
     else:
         min_val = values.min()
         max_val = values.max()
-        def map_to_color(val):
+        colors = []
+        for val in values:
             normalized = (val - min_val) / (max_val - min_val) if max_val > min_val else 0.5
             if normalized > 0.8:
-                return [255, 0, 0, 200]
+                colors.append([255, 0, 0, 200])  # Red
             elif normalized > 0.5:
-                return [255, 165, 0, 200]
+                colors.append([255, 165, 0, 200])  # Orange
             elif normalized > 0.3:
-                return [255, 255, 0, 200]
+                colors.append([255, 255, 0, 200])  # Yellow
             else:
-                return [0, 255, 0, 200]
-        return filtered_df[color_by].apply(map_to_color).tolist()
+                colors.append([0, 255, 0, 200])  # Green
+        return colors
 
 def display_map(filtered_df, city_name, color_by):
     """

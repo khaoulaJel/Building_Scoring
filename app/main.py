@@ -2,6 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import logging
+# Configure logging to suppress INFO messages from pgmpy
+logging.getLogger('pgmpy').setLevel(logging.WARNING)
+
 pd.set_option("styler.render.max_elements", 500_000)  
 
 from models.mahalanobis import classify_mahalanobis
@@ -940,7 +944,7 @@ with tab7:
 
     
 st.markdown("""
-    <div style="text-align: center; margin-top: 30px; padding: 10px; background-color: #f1f3f4; border-radius: 5px;">
-        <p style="margin: 0; color: #555;">Building Analytics Dashboard • Created with ❤️ • Data updated: April 2025</p>
+    <div style="text-align: center; margin-top: 30px; padding: 10px; background-color: #262730; border-radius: 5px;">
+        <p style="margin: 0; color: #ffffff;">Building Analytics Dashboard • Created with ❤️ • Data updated: April 2025</p>
     </div>
 """, unsafe_allow_html=True)
