@@ -1,87 +1,106 @@
 #!/usr/bin/env python3
 """
-compute_feature_ranges.py
+compute_feature_ranges.py  ▸  v2
 
-Compute the min/max ranges of specified numeric features for each class label in a city dataset.
+Compute min / max (or any aggregation) of numeric features **per class label**.
 
-Usage:
-  python compute_feature_ranges.py \
-    --input path/to/enriched_city_data.csv \
-    --class-col class_pca \
-    --features Energy_Consumption CO2_Usage Water_Usage \
-    --output path/to/ranges.csv
+New in v2
+---------
+* No need to hard-code a single `--class-col`. If you omit the flag we will
+  auto-detect all columns that start with ``class_`` — including the new
+  **Consensus** (``class_consensus``) and **TOPSIS** (``class_topsis``) — and
+  produce one output file *per* class column.
+* Optional ``--agg`` lets you choose ``minmax`` (default) or ``meanstd``.
+
+Examples
+--------
+# legacy one-off
+python compute_feature_ranges.py -i city.parquet -c class_pca -f Energy_Consumption CO2_Usage -o ranges_pca.csv
+
+# auto-scan every class_*, save alongside input
+python compute_feature_ranges.py -i city.parquet -f Energy_Consumption CO2_Usage
 """
+
 import argparse
-import pandas as pd
 import sys
+from pathlib import Path
+from typing import List
 
-def compute_ranges(df: pd.DataFrame, features: list, class_col: str) -> pd.DataFrame:
-    """
-    Group by `class_col` and compute min/max for each feature.
+import pandas as pd
 
-    Returns a DataFrame with columns:
-      - class_col
-      - {feature}_min, {feature}_max for each feature
-    """
-    # Aggregate
-    agg = df.groupby(class_col)[features].agg(['min', 'max'])
-    # Flatten MultiIndex columns
-    agg.columns = [f"{feat}_{stat}" for feat, stat in agg.columns]
+
+# ──────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────
+
+def compute_ranges(df: pd.DataFrame, features: List[str], class_col: str, mode: str) -> pd.DataFrame:
+    """Return an aggregated DataFrame for one class column."""
+    if mode == "minmax":
+        agg = df.groupby(class_col)[features].agg(["min", "max"])
+        agg.columns = [f"{feat}_{stat}" for feat, stat in agg.columns]
+    elif mode == "meanstd":
+        agg = df.groupby(class_col)[features].agg(["mean", "std"])
+        agg.columns = [f"{feat}_{stat}" for feat, stat in agg.columns]
+    else:
+        raise ValueError("mode must be 'minmax' or 'meanstd'")
     return agg.reset_index()
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Compute feature ranges by class label"
-    )
-    parser.add_argument(
-        '--input', '-i',
-        required=True,
-        help="Path to input CSV or Parquet file containing building data with class labels"
-    )
-    parser.add_argument(
-        '--class-col', '-c',
-        required=True,
-        help="Name of the column containing class labels"
-    )
-    parser.add_argument(
-        '--features', '-f',
-        nargs='+',
-        required=True,
-        help="List of numeric feature columns to compute ranges for"
-    )
-    parser.add_argument(
-        '--output', '-o',
-        required=True,
-        help="Path to output CSV file for saving the ranges"
-    )
-    args = parser.parse_args()
+# ──────────────────────────────────────────────────────────────
+# Main
+# ──────────────────────────────────────────────────────────────
 
-    # Load data
-    if args.input.lower().endswith('.parquet'):
-        df = pd.read_parquet(args.input)
+def main() -> None:
+    p = argparse.ArgumentParser("Compute feature ranges (or mean/std) by class label")
+    p.add_argument("--input", "-i", required=True, help="CSV or Parquet file with building data")
+    p.add_argument("--class-col", "-c", help="Specific class column; if omitted auto-detect all 'class_*'")
+    p.add_argument("--features", "-f", nargs="+", required=True, help="Numeric feature columns")
+    p.add_argument("--output", "-o", help="Output CSV file or pattern. If multiple class cols, we'll derive names.")
+    p.add_argument("--agg", choices=["minmax", "meanstd"], default="minmax", help="Aggregation type")
+    args = p.parse_args()
+
+    path = Path(args.input)
+    if not path.exists():
+        sys.exit(f"Error: {path} not found")
+
+    df = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_csv(path)
+
+    # Validate features present & numeric
+    missing = [f for f in args.features if f not in df.columns]
+    if missing:
+        sys.exit(f"Missing features: {missing}")
+    df[args.features] = df[args.features].apply(pd.to_numeric, errors="coerce")
+
+    # Determine which class columns to process
+    if args.class_col:
+        class_cols = [args.class_col]
+        if args.class_col not in df.columns:
+            sys.exit(f"Class column '{args.class_col}' not found in data")
     else:
-        df = pd.read_csv(args.input)
+        class_cols = [c for c in df.columns if c.startswith("class_")]
+        if not class_cols:
+            sys.exit("No class_* columns found; specify --class-col explicitly")
 
-    # Validate columns
-    missing_feats = [f for f in args.features if f not in df.columns]
-    if missing_feats:
-        print(f"Error: Missing features in data: {missing_feats}", file=sys.stderr)
-        sys.exit(1)
-    if args.class_col not in df.columns:
-        print(f"Error: Class column '{args.class_col}' not found in data", file=sys.stderr)
-        sys.exit(1)
+    # Output pattern handling
+    if args.output:
+        out_path = Path(args.output)
+        if len(class_cols) > 1 and not out_path.stem.endswith("{col}"):
+            # allow pattern like ranges_{col}.csv
+            print("✱ Multiple class columns detected; appending column name to output file.")
+            out_pattern = out_path.with_stem(out_path.stem + "_{col}")
+        else:
+            out_pattern = out_path
+    else:
+        out_pattern = path.with_stem(path.stem + "_{col}_ranges")
+        out_pattern = out_pattern.with_suffix(".csv")
 
-    # Ensure numeric
-    df[args.features] = df[args.features].apply(pd.to_numeric, errors='coerce')
-
-    # Compute ranges
-    ranges_df = compute_ranges(df, args.features, args.class_col)
-
-    # Save
-    ranges_df.to_csv(args.output, index=False)
-    print(f"✅ Feature ranges by class saved to {args.output}")
+    # Compute + save per class column
+    for c in class_cols:
+        out_df = _compute(df, args.features, c, args.agg)
+        dest = Path(str(out_pattern).format(col=c))
+        out_df.to_csv(dest, index=False)
+        print(f"✅ Saved ranges for {c} → {dest}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

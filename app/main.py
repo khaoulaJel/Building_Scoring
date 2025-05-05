@@ -9,7 +9,7 @@ logging.getLogger('pgmpy').setLevel(logging.WARNING)
 pd.set_option("styler.render.max_elements", 500_000)  
 
 from models.mahalanobis import classify_mahalanobis
-from scripts.validate_data import add_classifications, validate_and_preprocess_dataset
+from scripts.validate_data import add_classifications, validate_and_preprocess_dataset, ensure_classifications
 from visualization.map import display_map
 from visualization.charts import display_relationship_plot, display_distribution_plot
 from visualization.model_specific import display_model_visualization
@@ -160,7 +160,9 @@ with st.sidebar:
         "Mahalanobis Distance"  : "Mahalanobis Distance",
         "PCA Classification"    : "PCA Classification",
         "Weighted Classification": "Weighted Classification",
-        "Bayesian Classification": "Bayesian Classification"
+        "Bayesian Classification": "Bayesian Classification",
+        "Consensus"             : "Consensus",
+        "Topsis"             : "Topsis",
     }
 
     classification_method = st.radio(
@@ -185,7 +187,8 @@ with st.sidebar:
             )
             weights.append(w)
         # Pass the user's list straight into add_classifications
-    df = add_classifications(df, features=selected_features, weights=weights)
+    df = ensure_classifications(df, selected_features, weights)
+
         
     # Apply selected classification
     with st.spinner(f"Applying {classification_method}..."):
@@ -194,7 +197,9 @@ with st.sidebar:
             "Mahalanobis Distance": "class_mahalanobis",
             "PCA Classification": "class_pca",
             "Weighted Classification": "class_weighted",
-            "Bayesian Classification": "class_bayesian"
+            "Bayesian Classification": "class_bayesian",
+            "Consensus": "class_consensus",
+            "Topsis": "class_topsis"
         }
         selected_class_column = class_column_mapping[classification_method]
         
@@ -214,6 +219,12 @@ with st.sidebar:
         elif classification_method == "Bayesian Classification":
             from models.bayesian import classify_bayesian
             df = classify_bayesian(df, features=selected_features)
+        elif classification_method == "Consensus":
+            from models.consensus import classify_consensus
+            df = classify_consensus(df, features=selected_features, n_clusters=6)
+        elif classification_method == "Topsis":
+            from models.topsis import classify_topsis
+            df = classify_topsis(df, features=selected_features, weights=weights)
         
         # Assign class_label from the mapped column
         if selected_class_column in df.columns:
@@ -565,7 +576,10 @@ with tab5:
         "Euclidean"  : "class_euclidean",
         "Mahalanobis": "class_mahalanobis",
         "Weighted"   : "class_weighted",
-        "Bayesian"   : "class_bayesian"
+        "Bayesian"   : "class_bayesian",
+        "Consensus"  : "class_consensus",
+        "Topsis"     : "class_topsis",
+
     }
     method_name    = st.selectbox("Classification Method", list(methods))
     class_col      = methods[method_name]
@@ -651,29 +665,45 @@ with tab6:
 
     # — 2) Re-run classification on the full dataset —
     # (so that we have a `class_label` column)
-    df_all = add_classifications(df_all, features=selected_features, weights=weights)
+    df_all = ensure_classifications(df_all, selected_features, weights)
+
+
     if classification_method == "Euclidean Distance":
         from models.euclidean import classify_euclidean
         df_all = classify_euclidean(df_all, features=selected_features)
         col = "class_euclidean"
+
     elif classification_method == "Mahalanobis Distance":
         from models.mahalanobis import classify_mahalanobis
         df_all = classify_mahalanobis(df_all, features=selected_features, return_distance=True)
         col = "class_mahalanobis"
+
     elif classification_method == "PCA Classification":
         from models.pca import classify_pca
         df_all = classify_pca(df_all, features=selected_features)
         col = "class_pca"
+
     elif classification_method == "Weighted Classification":
         from models.weighted import classify_weighted
         df_all = classify_weighted(df_all, features=selected_features, weights=weights)
         col = "class_weighted"
-    else:  # Bayesian
+
+    elif classification_method == "Consensus":
+        from models.consensus import classify_consensus
+        df_all = classify_consensus(df_all, features=selected_features, n_clusters=6)
+        col = "class_consensus"
+
+    elif classification_method == "Topsis":
+        from models.topsis import classify_topsis
+        df_all = classify_topsis(df_all, features=selected_features, weights=weights)
+        col = "class_topsis"
+    else:  # Bayesian Classification
         from models.bayesian import classify_bayesian
         df_all = classify_bayesian(df_all, features=selected_features)
         col = "class_bayesian"
 
     df_all["class_label"] = df_all[col]
+
 
     # — 3) Compute counts by class and year —
     counts = df_all.groupby(["class_label", "year"]).size().unstack(fill_value=0).sort_index(axis=1)
@@ -789,7 +819,8 @@ with tab7:
         df = pd.read_csv(path)
         df = validate_and_preprocess_dataset(df, scoring_basis)
         df = df[df["year"] == year]
-        df = add_classifications(df, features=features, weights=weights)
+        df = ensure_classifications(df, features, weights)
+
         df = _method_fn(df)
         df["class_label"] = df[col_name]
         if sel_class != "All":
@@ -818,14 +849,18 @@ with tab7:
         "Mahalanobis": lambda d: classify_mahalanobis(d, features=selected_features, return_distance=True),
         "PCA":         lambda d: classify_pca(d, features=selected_features),
         "Weighted":    lambda d: classify_weighted(d, features=selected_features, weights=weights),
-        "Bayesian":    lambda d: classify_bayesian(d, features=selected_features)
+        "Bayesian":    lambda d: classify_bayesian(d, features=selected_features),
+        "Consensus":  lambda d: classify_consensus(d, features=selected_features, n_clusters=6),
+        "Topsis":     lambda d: classify_topsis(d, features=selected_features, weights=weights)
     }
     cols_map = {
         "Euclidean":   "class_euclidean",
         "Mahalanobis": "class_mahalanobis",
         "PCA":         "class_pca",
         "Weighted":    "class_weighted",
-        "Bayesian":    "class_bayesian"
+        "Bayesian":    "class_bayesian",
+        "Consensus":  "class_consensus",
+        "Topsis":     "class_topsis"
     }
     sel_method = st.selectbox("Classification Method", list(methods.keys()))
     method_fn  = methods[sel_method]

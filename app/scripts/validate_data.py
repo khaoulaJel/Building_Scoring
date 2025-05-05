@@ -1,116 +1,160 @@
-from datetime import time
 from pathlib import Path
+from typing import List, Optional
+
 import pandas as pd
-from pyproj import Transformer
 import streamlit as st
-import pandas as pd
+
+# ──────────────────────────────────────────────────────────────
+#  Imports for classification models
+# ──────────────────────────────────────────────────────────────
 from models.euclidean import classify_euclidean
 from models.mahalanobis import classify_mahalanobis
 from models.pca import classify_pca
 from models.weighted import classify_weighted
 from models.bayesian import classify_bayesian
+from models.consensus import classify_consensus
+from models.topsis import classify_topsis
 
 
+# ──────────────────────────────────────────────────────────────
+#  Constants
+# ──────────────────────────────────────────────────────────────
 REQUIRED_COLUMNS = [
     "building_id", "latitude", "longitude",
-    "CO2_Usage", "Water_Usage", "Energy_Consumption"
+    "CO2_Usage", "Water_Usage", "Energy_Consumption",
 ]
 INTENSITY_COLUMNS = ["Energy_Intensity", "CO2_Intensity"]
 
+# ──────────────────────────────────────────────────────────────
+#  Validation / Pre‑processing
+# ──────────────────────────────────────────────────────────────
 
-# Function to validate and preprocess dataset
-def validate_and_preprocess_dataset(df, scoring_basis):
-    missing_cols = [col for col in REQUIRED_COLUMNS if col not in df.columns]
-    if missing_cols:
-        if scoring_basis == "Per m² (kWh/m²/year)":
-            if "Energy_Intensity" in df.columns and "CO2_Intensity" in df.columns:
-                df["Energy_Consumption"] = df["Energy_Intensity"]
-                df["CO2_Usage"] = df["CO2_Intensity"]
-            else:
-                st.error(f"Missing required columns for intensity-based scoring: {missing_cols} or Energy_Intensity/CO2_Intensity")
-                return None
+def validate_and_preprocess_dataset(df: pd.DataFrame, scoring_basis: str) -> Optional[pd.DataFrame]:
+    """Validate columns, coerce numerics & switch to intensity metrics when requested."""
+
+    # 1 ▸ Handle intensity‑based scoring toggle
+    if scoring_basis == "Per m² (kWh/m²/year)":
+        if set(INTENSITY_COLUMNS).issubset(df.columns):
+            df = df.copy()
+            df["Energy_Consumption"] = df["Energy_Intensity"]
+            df["CO2_Usage"] = df["CO2_Intensity"]
         else:
-            st.error(f"Missing required columns: {missing_cols}")
+            st.error("Missing Energy_Intensity/CO2_Intensity for intensity‑based scoring.")
             return None
-    
-    numeric_cols = ["latitude", "longitude", "CO2_Usage", "Water_Usage", "Energy_Consumption"]
-    for col in numeric_cols:
-        try:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        except:
-            st.error(f"Column {col} must contain numeric values")
-            return None
-    
-    df = df.dropna(subset=REQUIRED_COLUMNS)
-    
-    if df.empty:
-        st.error("Dataset is empty after preprocessing")
+
+    # 2 ▸ Check required cols
+    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    if missing:
+        st.error(f"Missing required columns: {missing}")
         return None
-    
-    return df
-import pandas as pd
-import streamlit as st
-@st.cache_data
-def add_classifications(df: pd.DataFrame, features: list,    weights: list = None ) -> pd.DataFrame:
-    """
-    Add classification columns to the DataFrame using all available
-    classification models. Assumes each classifier returns a 'class_label'
-    column (and Bayesian returns 'Bayesian_Certainty').
 
-    Args:
-        df (pd.DataFrame): Input data
-        features (list): Exactly 3 feature column names for classification
-    Returns:
-        pd.DataFrame: df with added class_* columns (and any distance/confidence)
-    """
+    # 3 ▸ Coerce numerics & drop NA rows in required cols
+    numeric_cols = ["latitude", "longitude", "CO2_Usage", "Water_Usage", "Energy_Consumption"]
     df = df.copy()
-
-    # Euclidean Classification
-    try:
-        df_euclid = classify_euclidean(df, features=features)
-        df["class_euclidean"] = df_euclid["class_label"]
-    except Exception as e:
-        st.error(f"Euclidean Classification failed: {e}")
-        df["class_euclidean"] = "C"
-
-    # Mahalanobis Classification
-    try:
-        df_mah = classify_mahalanobis(df, features=features, return_distance=True)
-        df["class_mahalanobis"] = df_mah["class_label"]
-        if "Mahalanobis_Distance" in df_mah:
-            df["Mahalanobis_Distance"] = df_mah["Mahalanobis_Distance"]
-    except Exception as e:
-        st.error(f"Mahalanobis Classification failed: {e}")
-        df["class_mahalanobis"] = "C"
-
-    # PCA Classification
-    try:
-        df_pca = classify_pca(df, features=features)
-        df["class_pca"] = df_pca["class_label"]
-    except Exception as e:
-        st.error(f"PCA Classification failed: {e}")
-        df["class_pca"] = "C"
-
-    # Weighted Classification
-    try:
-        if weights is not None:
-            df_w = classify_weighted(df, features=features, weights=weights)
-        else:
-            # fallback:  equal weights
-            eq_w = [1]*len(features)
-            df_w = classify_weighted(df, features=features, weights=eq_w)
-        df["class_weighted"] = df_w["class_label"]
-    except Exception as e:
-        st.error(f"Weighted Classification failed: {e}")
-        df["class_weighted"] = "C"
-    # Bayesian Classification
-    try:
-        df_bayes = classify_bayesian(df, features=features)
-        df["class_bayesian"] = df_bayes["class_label"]
-        if "Bayesian_Certainty" in df_bayes:
-            df["Bayesian_Certainty"] = df_bayes["Bayesian_Certainty"]
-    except Exception as e:
-        st.error(f"Bayesian Classification failed: {e}")
-        df["class_bayesian"] = "C"
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=REQUIRED_COLUMNS)
+    if df.empty:
+        st.error("Dataset is empty after preprocessing.")
+        return None
 
     return df
+
+# ------------------------------------------------------------------
+# Utility: ensure the chosen class columns exist
+# ------------------------------------------------------------------
+def ensure_classifications(df, features, weights):
+    """Call add_classifications() only when at least one class_* column
+    is missing.  Returns df unchanged if everything is already there."""
+    expected = {
+        "class_euclidean",
+        "class_mahalanobis",
+        "class_pca",
+        "class_weighted",
+        "class_bayesian",
+        "class_consensus",
+        "class_topsis",
+    }
+    if expected.issubset(df.columns):
+        return df          # nothing to do
+    return add_classifications(df, features=features, weights=weights)
+
+
+# ──────────────────────────────────────────────────────────────
+#  Classification helper
+# ──────────────────────────────────────────────────────────────
+
+def add_classifications(
+    df: pd.DataFrame,
+    features: List[str],
+    weights: Optional[List[float]] = None,
+) -> pd.DataFrame:
+    """Run *all* classifiers (Euclidean, Mahalanobis, PCA, Weighted, Bayesian,
+    Consensus, TOPSIS) and append their `class_*` columns.
+    """
+
+    if len(features) < 2:
+        st.error("Need at least two features for classification.")
+        return df
+
+    out = df.copy()
+
+    # –– Euclidean ––
+    try:
+        out["class_euclidean"] = classify_euclidean(out, features=features)["class_label"]
+    except Exception as e:
+        st.warning(f"Euclidean failed: {e}")
+        out["class_euclidean"] = "C"
+
+    # –– Mahalanobis ––
+    try:
+        mah = classify_mahalanobis(out, features=features, return_distance=True)
+        out["class_mahalanobis"] = mah["class_label"]
+        if "Mahalanobis_Distance" in mah:
+            out["Mahalanobis_Distance"] = mah["Mahalanobis_Distance"]
+    except Exception as e:
+        st.warning(f"Mahalanobis failed: {e}")
+        out["class_mahalanobis"] = "C"
+
+    # –– PCA ––
+    try:
+        out["class_pca"] = classify_pca(out, features=features)["class_label"]
+    except Exception as e:
+        st.warning(f"PCA failed: {e}")
+        out["class_pca"] = "C"
+
+    # –– Weighted ––
+    try:
+        if weights is None:
+            weights = [1.0] * len(features)
+        out["class_weighted"] = classify_weighted(out, features=features, weights=weights)["class_label"]
+    except Exception as e:
+        st.warning(f"Weighted failed: {e}")
+        out["class_weighted"] = "C"
+
+    # –– Bayesian ––
+    try:
+        bayes = classify_bayesian(out, features=features)
+        out["class_bayesian"] = bayes["class_label"]
+        if "Bayesian_Certainty" in bayes:
+            out["Bayesian_Certainty"] = bayes["Bayesian_Certainty"]
+    except Exception as e:
+        st.warning(f"Bayesian failed: {e}")
+        out["class_bayesian"] = "C"
+
+    # –– Consensus ––
+    try:
+        out["class_consensus"] = classify_consensus(out, features=features, n_clusters=6)["class_label"]
+    except Exception as e:
+        st.warning(f"Consensus failed: {e}")
+        out["class_consensus"] = "C"
+
+    # –– TOPSIS ––
+    try:
+        out["class_topsis"] = classify_topsis(out, features=features, weights=weights)["class_topsis"]
+        out["topsis_score"] = classify_topsis(out, features=features, weights=weights)["topsis_score"]
+    except Exception as e:
+        st.warning(f"TOPSIS failed: {e}")
+        out["class_topsis"] = "C"
+
+    return out
