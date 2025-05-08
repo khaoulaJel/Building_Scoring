@@ -47,6 +47,8 @@ def display_model_visualization(df: pd.DataFrame, classification_method: str) ->
         hover_data.append("Mahalanobis_Distance")
     elif classification_method == "Bayesian Classification" and "Bayesian_Certainty" in df.columns:
         hover_data.append("Bayesian_Certainty")
+    elif classification_method.startswith("TOPSIS") and "topsis_score" in df.columns:
+        hover_data.append("topsis_score")
     else:
         hover_data.append("Energy_Consumption")  # Fallback hover data
     

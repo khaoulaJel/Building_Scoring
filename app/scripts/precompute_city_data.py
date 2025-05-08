@@ -102,6 +102,8 @@ from app.models.mahalanobis import classify_mahalanobis
 from app.models.pca         import classify_pca
 from app.models.weighted    import classify_weighted
 from app.models.bayesian    import classify_bayesian
+from app.models.consensus   import classify_consensus
+from app.models.topsis import classify_topsis
 
 features = args.features
 weights = args.weights
@@ -141,6 +143,27 @@ df['class_weighted'] = classify_weighted(
 df['class_bayesian'] = classify_bayesian(
     df, features=features
 )['class_label']
+# ── Consensus ────────────────────────────────────────────────
+# Runs k-means ▸ GMM ▸ agglomerative + consensus, then maps the
+# resulting clusters to A–F by average Energy_Consumption.
+
+df['class_consensus'] = classify_consensus(
+    df,
+    features=features,   # same features list
+    n_clusters=6         # keep 6 to map cleanly to A–F
+)['class_label']
+
+
+df = classify_topsis(
+    df,
+    features=['Energy_Consumption', 'CO2_Usage', 'Water_Usage'],
+    weights=[0.5, 0.3, 0.2],        # importance
+    benefit=[False, False, False],   # lower-is-better metrics
+    n_classes=6                      # A-F
+)
+
+# “topsis_score”  — continuous 0-1
+# “class_label”   — balanced A–F
 
 # Cleanup any stray column_label
 if 'class_label' in df.columns:
