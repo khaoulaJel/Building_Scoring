@@ -16,7 +16,7 @@ def classify_mahalanobis(
         df (pd.DataFrame): Input dataframe
         features (list of str): Numeric feature column names
         class_labels (list of str, optional): Labels for each distance-bin,
-            ordered from “closest” to “farthest.” Defaults to ['A','B','C','D','E','F'].
+            ordered from "closest" to "farthest." Defaults to ['A','B','C','D','E','F'].
         return_distance (bool): If True, keeps the 'Mahalanobis_Distance' column
 
     Returns:
@@ -31,7 +31,7 @@ def classify_mahalanobis(
         class_labels = ['A','B','C','D','E','F']
     n_classes = len(class_labels)
 
-    # 1. Compute the “optimal” reference (min on each feature)
+    # 1. Compute the "optimal" reference (min on each feature)
     optimal_point = df[features].min().values
 
     # 2. Compute covariance & its inverse
@@ -44,15 +44,25 @@ def classify_mahalanobis(
         axis=1
     )
 
-    # 4. Bin distances into n_classes equal-width intervals
-    df['bin'] = pd.cut(
+    # 4. Bin distances into n_classes equal-frequency (quantile) intervals
+    # Using pd.qcut instead of pd.cut for better handling of skewed data
+    df['bin'] = pd.qcut(
         df['Mahalanobis_Distance'],
-        bins=n_classes,
-        labels=class_labels
+        q=n_classes,
+        labels=class_labels,
+        duplicates='drop'  # Handle case where there are duplicate quantile values
     )
+    
+    # Handle edge case where qcut fails due to too many duplicates
+    if df['bin'].isna().any():
+        # Fallback to rank-based approach
+        df['rank'] = df['Mahalanobis_Distance'].rank(method='first')
+        bin_edges = np.linspace(0, len(df), n_classes + 1).astype(int)
+        df['bin'] = pd.cut(df['rank'], bins=bin_edges, labels=class_labels, include_lowest=True)
+        df = df.drop(columns=['rank'])
 
     # 5. Final class_label
-    df['class_label'] = df['bin'].astype(str)
+    df['class_label'] = df['bin']
 
     # 6. Cleanup
     if return_distance:

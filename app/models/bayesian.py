@@ -51,11 +51,26 @@ def classify_bayesian(
     opt_scaled = scaler.transform([optimal_point])[0]
     distances = np.linalg.norm(X_scaled - opt_scaled, axis=1)
 
-    # Digitize distances into equal-width bins for class labels
-    bins = np.linspace(distances.min(), distances.max(), n_classes + 1)
-    idx = np.digitize(distances, bins, right=False) - 1
-    idx = np.clip(idx, 0, n_classes-1)
-    disc_df['Class'] = [class_labels[i] for i in idx]
+    # Use quantile-based binning instead of equal-width bins
+    # This better handles skewed distance distributions
+    try:
+        disc_df['Class'] = pd.qcut(
+            distances, 
+            q=n_classes, 
+            labels=class_labels,
+            duplicates='drop'
+        )
+        
+        # Handle case where qcut fails due to too many duplicates
+        if disc_df['Class'].isna().any():
+            raise ValueError("Too many duplicate values for qcut")
+            
+    except ValueError:
+        # Fallback to rank-based approach which guarantees equal-sized bins
+        ranks = pd.Series(distances).rank(method='first')
+        bin_edges = np.linspace(0, len(ranks), n_classes + 1).astype(int)
+        bins = pd.cut(ranks, bins=bin_edges, labels=False, include_lowest=True)
+        disc_df['Class'] = [class_labels[i] for i in bins]
 
     # 3 ▸ Build a naïve‐Bayes structure: every feature‐level → Class
     edges = [(lvl, 'Class') for lvl in level_names]

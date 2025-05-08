@@ -157,6 +157,7 @@ with st.sidebar:
     st.header("Analysis Method")
     classification_methods = {
         "Euclidean Distance"    : "Euclidean Distance",
+        "Manhattan Distance"    : "Manhattan Distance",
         "Mahalanobis Distance"  : "Mahalanobis Distance",
         "PCA Classification"    : "PCA Classification",
         "Weighted Classification": "Weighted Classification",
@@ -194,6 +195,7 @@ with st.sidebar:
     with st.spinner(f"Applying {classification_method}..."):
         class_column_mapping = {
             "Euclidean Distance": "class_euclidean",
+            "Manhattan Distance": "class_manhattan",
             "Mahalanobis Distance": "class_mahalanobis",
             "PCA Classification": "class_pca",
             "Weighted Classification": "class_weighted",
@@ -207,6 +209,9 @@ with st.sidebar:
         if classification_method == "Euclidean Distance":
             from models.euclidean import classify_euclidean
             df = classify_euclidean(df, features=selected_features)
+        elif classification_method == "Manhattan Distance":
+            from models.manhattan import classify_manhattan
+            df = classify_manhattan(df, features=selected_features)
         elif classification_method == "Mahalanobis Distance":
             from models.mahalanobis import classify_mahalanobis
             df = classify_mahalanobis(df, features=selected_features, return_distance=True)
@@ -574,12 +579,12 @@ with tab5:
     methods = {
         "PCA"        : "class_pca",
         "Euclidean"  : "class_euclidean",
+        "Manhattan"  : "class_manhattan",
         "Mahalanobis": "class_mahalanobis",
         "Weighted"   : "class_weighted",
         "Bayesian"   : "class_bayesian",
         "Consensus"  : "class_consensus",
         "Topsis"     : "class_topsis",
-
     }
     method_name    = st.selectbox("Classification Method", list(methods))
     class_col      = methods[method_name]
@@ -672,6 +677,11 @@ with tab6:
         from models.euclidean import classify_euclidean
         df_all = classify_euclidean(df_all, features=selected_features)
         col = "class_euclidean"
+    
+    elif classification_method == "Manhattan Distance":
+        from models.manhattan import classify_manhattan
+        df_all = classify_manhattan(df_all, features=selected_features)
+        col = "class_manhattan"
 
     elif classification_method == "Mahalanobis Distance":
         from models.mahalanobis import classify_mahalanobis
@@ -846,6 +856,7 @@ with tab7:
 
     methods = {
         "Euclidean":   lambda d: classify_euclidean(d, features=selected_features),
+        "Manhattan":   lambda d: classify_manhattan(d, features=selected_features),
         "Mahalanobis": lambda d: classify_mahalanobis(d, features=selected_features, return_distance=True),
         "PCA":         lambda d: classify_pca(d, features=selected_features),
         "Weighted":    lambda d: classify_weighted(d, features=selected_features, weights=weights),
@@ -855,6 +866,7 @@ with tab7:
     }
     cols_map = {
         "Euclidean":   "class_euclidean",
+        "Manhattan":   "class_manhattan",
         "Mahalanobis": "class_mahalanobis",
         "PCA":         "class_pca",
         "Weighted":    "class_weighted",

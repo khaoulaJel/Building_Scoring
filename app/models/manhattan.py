@@ -1,13 +1,13 @@
 import pandas as pd
 import numpy as np
 
-def classify_euclidean(
+def classify_manhattan(
     df: pd.DataFrame,
     features: list,
     class_labels: list = None
 ) -> pd.DataFrame:
     """
-    Euclidean distance–based classification into N classes based
+    Manhattan distance–based classification into N classes based
     on any number of features.
 
     Args:
@@ -34,10 +34,9 @@ def classify_euclidean(
         df[norm_col] = df[feat] / (max_val if max_val != 0 else 1)
         norm_cols.append(norm_col)
 
-    # 2. Compute Euclidean distance to the origin in N-D
-    df['distance'] = np.sqrt(
-        sum(df[n]**2 for n in norm_cols)
-    )
+    # 2. Compute Manhattan distance to the origin in N-D
+    # Manhattan distance is the sum of absolute values of coordinates
+    df['distance'] = df[norm_cols].abs().sum(axis=1)
 
     # 3. Create N equal-frequency bins (quantiles) instead of equal-width bins
     # This handles skewed data better than equal-width binning
