@@ -5,7 +5,7 @@ Pre-compute building dataset for a single city.
 This script:
  1. Reads a raw DPE CSV
  2. Renames key columns and adds derived metrics (Water_Usage, log-transforms)
- 3. Runs classification algorithms (Euclidean, Mahalanobis, PCA, Weighted, Bayesian)
+ 3. Runs classification algorithms (Mahalanobis, PCA, Weighted, Bayesian, Manhattan, TOPSIS)
  4. Saves the enriched data to Parquet and overwrites the original CSV (with backup)
 
 Usage:
@@ -97,13 +97,12 @@ for col in log_targets:
 # ──────────────────────────────────────────────────────────────
 # 4 ▸ Run classification algorithms
 # ──────────────────────────────────────────────────────────────
-from app.models.euclidean   import classify_euclidean
+from app.models.weighted   import classify_weighted
+from app.models.pca        import classify_pca
+from app.models.bayesian   import classify_bayesian
 from app.models.mahalanobis import classify_mahalanobis
-from app.models.pca         import classify_pca
-from app.models.weighted    import classify_weighted
-from app.models.bayesian    import classify_bayesian
-from app.models.consensus   import classify_consensus
-from app.models.topsis import classify_topsis
+from app.models.manhattan  import classify_manhattan
+from app.models.topsis     import classify_topsis
 
 features = args.features
 weights = args.weights
@@ -124,11 +123,6 @@ df_mah = classify_mahalanobis(
 df['class_mahalanobis']     = df_mah['class_label']
 df['Mahalanobis_Distance']  = df_mah['Mahalanobis_Distance']
 
-# Euclidean
-df['class_euclidean'] = classify_euclidean(
-    df, features=features
-)['class_label']
-
 # PCA
 df['class_pca'] = classify_pca(
     df, features=features
@@ -143,17 +137,13 @@ df['class_weighted'] = classify_weighted(
 df['class_bayesian'] = classify_bayesian(
     df, features=features
 )['class_label']
-# ── Consensus ────────────────────────────────────────────────
-# Runs k-means ▸ GMM ▸ agglomerative + consensus, then maps the
-# resulting clusters to A–F by average Energy_Consumption.
 
-df['class_consensus'] = classify_consensus(
-    df,
-    features=features,   # same features list
-    n_clusters=6         # keep 6 to map cleanly to A–F
+# Manhattan
+df['class_manhattan'] = classify_manhattan(
+    df, features=features
 )['class_label']
 
-
+# TOPSIS
 df = classify_topsis(
     df,
     features=['Energy_Consumption', 'CO2_Usage', 'Water_Usage'],

@@ -3,10 +3,9 @@ from flask_cors import CORS
 import pandas as pd
 
 from data.data_loader import load_osm_data
-from models.euclidean import classify_euclidean
 from models.mahalanobis import classify_mahalanobis
 from models.pca import classify_pca
-
+from models.manhattan import classify_manhattan
 from models.weighted import classify_weighted
 from models.bayesian import classify_bayesian
 
@@ -69,8 +68,8 @@ def classify_buildings():
         df = city_data_cache[city_name].copy()
         
         # Apply classification
-        if classification_method == "euclidean":
-            df = classify_euclidean(df)
+        if classification_method == "manhattan":
+            df = classify_manhattan(df)
         elif classification_method == "mahalanobis":
             df = classify_mahalanobis(df)
         elif classification_method == "pca":

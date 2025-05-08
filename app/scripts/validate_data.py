@@ -7,12 +7,11 @@ import streamlit as st
 # ──────────────────────────────────────────────────────────────
 #  Imports for classification models
 # ──────────────────────────────────────────────────────────────
-from models.euclidean import classify_euclidean
 from models.mahalanobis import classify_mahalanobis
 from models.pca import classify_pca
 from models.weighted import classify_weighted
 from models.bayesian import classify_bayesian
-from models.consensus import classify_consensus
+from models.manhattan import classify_manhattan
 from models.topsis import classify_topsis
 
 
@@ -68,11 +67,11 @@ def ensure_classifications(df, features, weights):
     is missing.  Returns df unchanged if everything is already there."""
     expected = {
         "class_euclidean",
+        "class_manhattan",
         "class_mahalanobis",
         "class_pca",
         "class_weighted",
         "class_bayesian",
-        "class_consensus",
         "class_topsis",
     }
     if expected.issubset(df.columns):
@@ -89,8 +88,8 @@ def add_classifications(
     features: List[str],
     weights: Optional[List[float]] = None,
 ) -> pd.DataFrame:
-    """Run *all* classifiers (Euclidean, Mahalanobis, PCA, Weighted, Bayesian,
-    Consensus, TOPSIS) and append their `class_*` columns.
+    """Run *all* classifiers (Mahalanobis, PCA, Weighted, Bayesian,
+    Manhattan, TOPSIS) and append their `class_*` columns.
     """
 
     if len(features) < 2:
@@ -98,13 +97,6 @@ def add_classifications(
         return df
 
     out = df.copy()
-
-    # –– Euclidean ––
-    try:
-        out["class_euclidean"] = classify_euclidean(out, features=features)["class_label"]
-    except Exception as e:
-        st.warning(f"Euclidean failed: {e}")
-        out["class_euclidean"] = "C"
 
     # –– Mahalanobis ––
     try:
@@ -142,12 +134,12 @@ def add_classifications(
         st.warning(f"Bayesian failed: {e}")
         out["class_bayesian"] = "C"
 
-    # –– Consensus ––
+    # –– Manhattan ––
     try:
-        out["class_consensus"] = classify_consensus(out, features=features, n_clusters=6)["class_label"]
+        out["class_manhattan"] = classify_manhattan(out, features=features)["class_label"]
     except Exception as e:
-        st.warning(f"Consensus failed: {e}")
-        out["class_consensus"] = "C"
+        st.warning(f"Manhattan failed: {e}")
+        out["class_manhattan"] = "C"
 
     # –– TOPSIS ––
     try:

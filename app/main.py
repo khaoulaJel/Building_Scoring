@@ -9,6 +9,10 @@ logging.getLogger('pgmpy').setLevel(logging.WARNING)
 pd.set_option("styler.render.max_elements", 500_000)  
 
 from models.mahalanobis import classify_mahalanobis
+from models.pca import classify_pca
+from models.weighted import classify_weighted
+from models.bayesian import classify_bayesian
+from models.manhattan import classify_manhattan
 from scripts.validate_data import add_classifications, validate_and_preprocess_dataset, ensure_classifications
 from visualization.map import display_map
 from visualization.charts import display_relationship_plot, display_distribution_plot
@@ -156,13 +160,11 @@ with st.sidebar:
     # Classification method selection
     st.header("Analysis Method")
     classification_methods = {
-        "Euclidean Distance"    : "Euclidean Distance",
         "Manhattan Distance"    : "Manhattan Distance",
         "Mahalanobis Distance"  : "Mahalanobis Distance",
         "PCA Classification"    : "PCA Classification",
         "Weighted Classification": "Weighted Classification",
         "Bayesian Classification": "Bayesian Classification",
-        "Consensus"             : "Consensus",
         "Topsis"             : "Topsis",
     }
 
@@ -194,22 +196,17 @@ with st.sidebar:
     # Apply selected classification
     with st.spinner(f"Applying {classification_method}..."):
         class_column_mapping = {
-            "Euclidean Distance": "class_euclidean",
             "Manhattan Distance": "class_manhattan",
             "Mahalanobis Distance": "class_mahalanobis",
             "PCA Classification": "class_pca",
             "Weighted Classification": "class_weighted",
             "Bayesian Classification": "class_bayesian",
-            "Consensus": "class_consensus",
             "Topsis": "class_topsis"
         }
         selected_class_column = class_column_mapping[classification_method]
         
         # Apply the selected classification method
-        if classification_method == "Euclidean Distance":
-            from models.euclidean import classify_euclidean
-            df = classify_euclidean(df, features=selected_features)
-        elif classification_method == "Manhattan Distance":
+        if classification_method == "Manhattan Distance":
             from models.manhattan import classify_manhattan
             df = classify_manhattan(df, features=selected_features)
         elif classification_method == "Mahalanobis Distance":
@@ -224,9 +221,6 @@ with st.sidebar:
         elif classification_method == "Bayesian Classification":
             from models.bayesian import classify_bayesian
             df = classify_bayesian(df, features=selected_features)
-        elif classification_method == "Consensus":
-            from models.consensus import classify_consensus
-            df = classify_consensus(df, features=selected_features, n_clusters=6)
         elif classification_method == "Topsis":
             from models.topsis import classify_topsis
             df = classify_topsis(df, features=selected_features, weights=weights)
@@ -578,12 +572,10 @@ with tab5:
     # 1) Pick method & class
     methods = {
         "PCA"        : "class_pca",
-        "Euclidean"  : "class_euclidean",
         "Manhattan"  : "class_manhattan",
         "Mahalanobis": "class_mahalanobis",
         "Weighted"   : "class_weighted",
         "Bayesian"   : "class_bayesian",
-        "Consensus"  : "class_consensus",
         "Topsis"     : "class_topsis",
     }
     method_name    = st.selectbox("Classification Method", list(methods))
@@ -673,12 +665,7 @@ with tab6:
     df_all = ensure_classifications(df_all, selected_features, weights)
 
 
-    if classification_method == "Euclidean Distance":
-        from models.euclidean import classify_euclidean
-        df_all = classify_euclidean(df_all, features=selected_features)
-        col = "class_euclidean"
-    
-    elif classification_method == "Manhattan Distance":
+    if classification_method == "Manhattan Distance":
         from models.manhattan import classify_manhattan
         df_all = classify_manhattan(df_all, features=selected_features)
         col = "class_manhattan"
@@ -698,11 +685,6 @@ with tab6:
         df_all = classify_weighted(df_all, features=selected_features, weights=weights)
         col = "class_weighted"
 
-    elif classification_method == "Consensus":
-        from models.consensus import classify_consensus
-        df_all = classify_consensus(df_all, features=selected_features, n_clusters=6)
-        col = "class_consensus"
-
     elif classification_method == "Topsis":
         from models.topsis import classify_topsis
         df_all = classify_topsis(df_all, features=selected_features, weights=weights)
@@ -720,102 +702,259 @@ with tab6:
     st.subheader("Building Counts by Class and Year")
     st.dataframe(counts.style.format("{:,}"))
 
-    # — 4) Grouped bar chart for every year present —
+    # — 4) Grouped bar chart comparing values by class across years —
     import plotly.graph_objects as go
     years_present = list(counts.columns)
-    bars = [go.Bar(name=str(yr), x=counts.index, y=counts[yr]) for yr in years_present]
-    fig = go.Figure(bars)
-    fig.update_layout(
-        barmode="group",
-        xaxis_title="Energy Class",
-        yaxis_title="Number of Buildings",
-        legend_title="Year",
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-    # — 5) Year-over-year change between last two years (if available) —
-    if len(years_present) >= 2:
-        y0, y1 = years_present[-2], years_present[-1]
-        s0 = counts[y0]
-        s1 = counts[y1]
-        delta = s1 - s0
-        pct   = (delta.div(s0.replace({0: 1})) * 100).fillna(0)
-
-        delta_df = pd.DataFrame({
-            "Class":           counts.index,
-            f"Δ Count ({y1}–{y0})": delta.values,
-            f"Δ % ({y1}–{y0})":     pct.values
-        })
-        st.subheader(f"Change in Counts ({y1} – {y0})")
-        st.dataframe(
-            delta_df.style.format({
-                f"Δ Count ({y1}–{y0})": "{:+,}",
-                f"Δ % ({y1}–{y0})":     "{:+.1f}%"
-            }),
-            use_container_width=True
+    
+    # Create DataFrames to store min, max, and avg values for each metric, class and year
+    metrics = {
+        "Energy_Consumption": "Energy (kWh)",
+        "CO2_Usage": "CO₂ Emissions (kg)",
+        "Water_Usage": "Water Usage (L)"
+    }
+    
+    # Dictionary to hold all data frames
+    data_frames = {
+        "Energy_Consumption": {
+            "min": pd.DataFrame(index=counts.index, columns=years_present),
+            "max": pd.DataFrame(index=counts.index, columns=years_present),
+            "avg": pd.DataFrame(index=counts.index, columns=years_present)
+        },
+        "CO2_Usage": {
+            "min": pd.DataFrame(index=counts.index, columns=years_present),
+            "max": pd.DataFrame(index=counts.index, columns=years_present),
+            "avg": pd.DataFrame(index=counts.index, columns=years_present)
+        },
+        "Water_Usage": {
+            "min": pd.DataFrame(index=counts.index, columns=years_present),
+            "max": pd.DataFrame(index=counts.index, columns=years_present),
+            "avg": pd.DataFrame(index=counts.index, columns=years_present)
+        }
+    }
+    
+    # Calculate min, max, and average values for each metric, class and year
+    for yr in years_present:
+        year_data = df_all[df_all["year"] == yr]
+        for cls in counts.index:
+            class_data = year_data[year_data["class_label"] == cls]
+            if not class_data.empty:
+                for metric in metrics.keys():
+                    data_frames[metric]["min"].loc[cls, yr] = class_data[metric].min()
+                    data_frames[metric]["max"].loc[cls, yr] = class_data[metric].max()
+                    data_frames[metric]["avg"].loc[cls, yr] = class_data[metric].mean()
+    
+    # Let user choose comparison type, metric and scale
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        comparison_type = st.radio(
+            "Select comparison type:",
+            ["Building Counts", "Minimum Values", "Maximum Values", "Average Values"],
+            horizontal=True
         )
-    else:
-        st.info("Not enough historical years to compute year-over-year change.")
+    with col2:
+        selected_metric = st.selectbox(
+            "Select metric to compare:",
+            options=list(metrics.keys()),
+            format_func=lambda x: metrics[x]
+        )
+    with col3:
+        use_log_scale = st.checkbox("Use log scale", value=True, 
+                                  help="Logarithmic scale works better for data with large variations")
+    
+    # Add explanation about multi-feature classification
+    if comparison_type != "Building Counts":
+        st.info(
+            "📊 **Note on Classification vs. Metrics:** Buildings are classified based on multiple features "
+            "(energy, CO₂, water usage), not just the selected metric. This means a Class B building might "
+            "have higher values in one metric than a Class C building, while performing better on other metrics. "
+            "These visualizations show actual metric values within each class, not the classification criteria."
+        )
 
-    # — 6) Summary metrics for first vs last year —
-    first_year, last_year = years_present[0], years_present[-1]
-    total_first = int(counts[first_year].sum())
-    total_last  = int(counts[last_year].sum())
-    total_diff  = total_last - total_first
-    avg_consumption = df_all.groupby("year")["Energy_Consumption"].mean()
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric(f"Total Buildings {first_year}", f"{total_first:,}")
-    c2.metric(f"Total Buildings {last_year}", f"{total_last:,}", delta=f"{total_diff:+,}")
-    c3.metric(f"Avg Energy {first_year}", f"{avg_consumption.get(first_year, 0):.1f} kWh")
-    c4.metric(
-        f"Avg Energy {last_year}",
-        f"{avg_consumption.get(last_year, 0):.1f} kWh",
-        delta=f"{(avg_consumption.get(last_year,0) - avg_consumption.get(first_year,0)):+.1f} kWh"
-    )
-
-    # — 7) Stacked area chart showing class distribution over all years —
-    st.subheader("Building Class Distribution Evolution")
-    fig_area = go.Figure()
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
-    for i, cls in enumerate(counts.index):
-        y_vals = [counts.at[cls, yr] for yr in years_present]
-        fig_area.add_trace(go.Scatter(
-            x=years_present,
-            y=y_vals,
-            mode="lines",
-            name=cls,
-            line=dict(width=0.5, color=colors[i % len(colors)]),
-            stackgroup="one"
-        ))
-    fig_area.update_layout(
-        title="Class Distribution by Year",
-        xaxis_title="Year",
-        yaxis_title="Buildings",
-        template="plotly_white",
-        height=450,
-        hovermode="x unified"
-    )
-    st.plotly_chart(fig_area, use_container_width=True)
-
-    # — 8) Pie charts for each year’s class proportions —
-    st.subheader("Building Class Proportion Comparison")
-    pie_cols = st.columns(len(years_present))
-    for idx, yr in enumerate(years_present):
-        with pie_cols[idx]:
-            year_counts = counts[yr]
-            fig_pie = go.Figure(data=[go.Pie(
-                labels=year_counts.index,
-                values=year_counts.values,
-                hole=0.4,
-                marker_colors=colors[:len(year_counts)]
-            )])
-            fig_pie.update_layout(
-                title=f"{yr} Distribution",
-                height=350,
-                legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
+    # Show the appropriate visualization based on user selection
+    if comparison_type == "Building Counts":
+        # Original building counts visualization
+        bars = [go.Bar(name=str(yr), x=counts.index, y=counts[yr]) for yr in years_present]
+        fig = go.Figure(bars)
+        fig.update_layout(
+            barmode="group",
+            title=f"Building Counts by Class Across Years",
+            xaxis_title="Energy Class",
+            yaxis_title="Number of Buildings",
+            legend_title="Year",
+            height=500,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    elif comparison_type == "Minimum Values":
+        # Get relevant dataframe
+        values_df = data_frames[selected_metric]["min"]
+        unit = metrics[selected_metric].split('(')[1].strip(')')
+        
+        # Create figure for values
+        fig_values = go.Figure()
+        for yr in years_present:
+            # Convert to numeric and handle NaN values safely
+            y_values = pd.to_numeric(values_df[yr], errors='coerce').fillna(0)
+            # Format text to handle large numbers nicely
+            text_values = [f"{v:,.1f}" for v in y_values]
+            
+            fig_values.add_trace(go.Bar(
+                name=f"{yr}",
+                x=values_df.index,
+                y=y_values,
+                text=text_values,
+                textposition="auto"
+            ))
+        
+        fig_values.update_layout(
+            barmode="group",
+            title=f"Minimum {metrics[selected_metric]} by Class Across Years",
+            xaxis_title="Energy Class",
+            yaxis_title=f"Min {metrics[selected_metric]}",
+            legend_title="Year",
+            height=500,
+        )
+        
+        if use_log_scale:
+            fig_values.update_layout(yaxis_type="log")
+            
+        st.plotly_chart(fig_values, use_container_width=True)
+        
+        # Add table view option for detailed comparison
+        if st.checkbox(f"Show detailed data for minimum {selected_metric}"):
+            st.dataframe(
+                values_df.style.format("{:,.2f}"),
+                use_container_width=True
             )
-            st.plotly_chart(fig_pie, use_container_width=True)
+    
+    elif comparison_type == "Maximum Values":
+        # Get relevant dataframe
+        values_df = data_frames[selected_metric]["max"]
+        unit = metrics[selected_metric].split('(')[1].strip(')')
+        
+        # Create figure for values
+        fig_values = go.Figure()
+        for yr in years_present:
+            # Convert to numeric and handle NaN values safely
+            y_values = pd.to_numeric(values_df[yr], errors='coerce').fillna(0)
+            # Format text to handle large numbers nicely
+            text_values = [f"{v:,.1f}" for v in y_values]
+            
+            fig_values.add_trace(go.Bar(
+                name=f"{yr}",
+                x=values_df.index,
+                y=y_values,
+                text=text_values,
+                textposition="auto"
+            ))
+        
+        fig_values.update_layout(
+            barmode="group",
+            title=f"Maximum {metrics[selected_metric]} by Class Across Years",
+            xaxis_title="Energy Class",
+            yaxis_title=f"Max {metrics[selected_metric]}",
+            legend_title="Year",
+            height=500,
+        )
+        
+        if use_log_scale:
+            fig_values.update_layout(yaxis_type="log")
+            
+        st.plotly_chart(fig_values, use_container_width=True)
+        
+        # Add table view option for detailed comparison
+        if st.checkbox(f"Show detailed data for maximum {selected_metric}"):
+            st.dataframe(
+                values_df.style.format("{:,.2f}"),
+                use_container_width=True
+            )
+    
+    else:  # Average Values
+        # Get relevant dataframe
+        values_df = data_frames[selected_metric]["avg"]
+        unit = metrics[selected_metric].split('(')[1].strip(')')
+        
+        # Create figure for values
+        fig_values = go.Figure()
+        for yr in years_present:
+            # Convert to numeric and handle NaN values safely
+            y_values = pd.to_numeric(values_df[yr], errors='coerce').fillna(0)
+            # Format text to handle large numbers nicely
+            text_values = [f"{v:,.1f}" for v in y_values]
+            
+            fig_values.add_trace(go.Bar(
+                name=f"{yr}",
+                x=values_df.index,
+                y=y_values,
+                text=text_values,
+                textposition="auto"
+            ))
+        
+        fig_values.update_layout(
+            barmode="group",
+            title=f"Average {metrics[selected_metric]} by Class Across Years",
+            xaxis_title="Energy Class",
+            yaxis_title=f"Avg {metrics[selected_metric]}",
+            legend_title="Year",
+            height=500,
+        )
+        
+        if use_log_scale:
+            fig_values.update_layout(yaxis_type="log")
+            
+        st.plotly_chart(fig_values, use_container_width=True)
+        
+        # Add table view option for detailed comparison
+        if st.checkbox(f"Show detailed data for average {selected_metric}"):
+            st.dataframe(
+                values_df.style.format("{:,.2f}"),
+                use_container_width=True
+            )
+    
+    # Show comparison between highest class (A) and lowest class (F)
+    if comparison_type != "Building Counts" and "A" in counts.index and "F" in counts.index:
+        st.subheader("Class A vs F Comparison")
+        
+        # Get the currently selected values dataframe
+        if comparison_type == "Minimum Values":
+            values_df = data_frames[selected_metric]["min"]
+            metric_name = f"Min {selected_metric}"
+        elif comparison_type == "Maximum Values":
+            values_df = data_frames[selected_metric]["max"]
+            metric_name = f"Max {selected_metric}"
+        else:
+            values_df = data_frames[selected_metric]["avg"]
+            metric_name = f"Avg {selected_metric}"
+        
+        unit = metrics[selected_metric].split('(')[1].strip(')')
+        
+        # Calculate A-F ratio for each year
+        ratio_data = []
+        for yr in years_present:
+            class_a = pd.to_numeric(values_df.loc["A", yr], errors='coerce')
+            class_f = pd.to_numeric(values_df.loc["F", yr], errors='coerce')
+            if not pd.isna(class_a) and not pd.isna(class_f) and class_f != 0:
+                ratio = class_a / class_f
+                ratio_data.append({
+                    "Year": yr,
+                    f"Class A ({unit})": class_a,
+                    f"Class F ({unit})": class_f,
+                    "A:F Ratio": ratio
+                })
+        
+        if ratio_data:
+            ratio_df = pd.DataFrame(ratio_data)
+            cols = st.columns(len(ratio_df))
+            for i, (_, row) in enumerate(ratio_df.iterrows()):
+                with cols[i]:
+                    st.metric(
+                        f"Year {row['Year']}",
+                        f"{row['A:F Ratio']:.2f}x",
+                        help=f"Class A: {row[f'Class A ({unit})']:,.2f} {unit} vs Class F: {row[f'Class F ({unit})']:,.2f} {unit}"
+                    )
+                    st.caption(f"{metric_name} - A to F ratio")
+        else:
+            st.info("Not enough data to calculate A-F comparison")
 
 with tab7:
     import pandas as pd
@@ -855,23 +994,19 @@ with tab7:
     sel_class = st.selectbox("Filter by Energy Class (optional)", ["All"] + list("ABCDEF"))
 
     methods = {
-        "Euclidean":   lambda d: classify_euclidean(d, features=selected_features),
         "Manhattan":   lambda d: classify_manhattan(d, features=selected_features),
         "Mahalanobis": lambda d: classify_mahalanobis(d, features=selected_features, return_distance=True),
         "PCA":         lambda d: classify_pca(d, features=selected_features),
         "Weighted":    lambda d: classify_weighted(d, features=selected_features, weights=weights),
         "Bayesian":    lambda d: classify_bayesian(d, features=selected_features),
-        "Consensus":  lambda d: classify_consensus(d, features=selected_features, n_clusters=6),
         "Topsis":     lambda d: classify_topsis(d, features=selected_features, weights=weights)
     }
     cols_map = {
-        "Euclidean":   "class_euclidean",
         "Manhattan":   "class_manhattan",
         "Mahalanobis": "class_mahalanobis",
         "PCA":         "class_pca",
         "Weighted":    "class_weighted",
         "Bayesian":    "class_bayesian",
-        "Consensus":  "class_consensus",
         "Topsis":     "class_topsis"
     }
     sel_method = st.selectbox("Classification Method", list(methods.keys()))
