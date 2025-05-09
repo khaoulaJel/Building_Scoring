@@ -748,7 +748,7 @@ with tab6:
     with col1:
         comparison_type = st.radio(
             "Select comparison type:",
-            ["Building Counts", "Minimum Values", "Maximum Values", "Average Values"],
+            ["Minimum Values", "Maximum Values", "Average Values"],
             horizontal=True
         )
     with col2:
@@ -771,21 +771,8 @@ with tab6:
         )
 
     # Show the appropriate visualization based on user selection
-    if comparison_type == "Building Counts":
-        # Original building counts visualization
-        bars = [go.Bar(name=str(yr), x=counts.index, y=counts[yr]) for yr in years_present]
-        fig = go.Figure(bars)
-        fig.update_layout(
-            barmode="group",
-            title=f"Building Counts by Class Across Years",
-            xaxis_title="Energy Class",
-            yaxis_title="Number of Buildings",
-            legend_title="Year",
-            height=500,
-        )
-        st.plotly_chart(fig, use_container_width=True)
     
-    elif comparison_type == "Minimum Values":
+    if comparison_type == "Minimum Values":
         # Get relevant dataframe
         values_df = data_frames[selected_metric]["min"]
         unit = metrics[selected_metric].split('(')[1].strip(')')
@@ -1111,42 +1098,146 @@ with tab7:
 
     st.markdown("---")
 
-    # — Class Distribution as percentage of each city's total —
-    st.subheader("🏷️ Class Distribution (%)")
-    dist = pd.DataFrame({
-        city: (dfc["class_label"].value_counts(normalize=True) * 100)
-        for city, dfc in city_dfs.items()
-    }).fillna(0)
-    dist.index.name = "Class"
-    dist = dist.reset_index().melt(id_vars="Class", var_name="City", value_name="Pct")
-    fig_dist = px.bar(
-        dist,
-        x="Class",
-        y="Pct",
-        color="City",
-        barmode="group",
-        text_auto=".1f",
-        title="Class Share in Each City"
-    )
-    fig_dist.update_layout(yaxis_title="%", height=400)
-    st.plotly_chart(fig_dist, use_container_width=True)
-
-    st.markdown("---")
-
-    # — Detailed Table for Stakeholders —
-    st.subheader("📋 Detailed Metrics Table")
-    st.dataframe(
-        summary_df.style.format({
-            "Total Buildings": "{:,}",
-            "Avg Energy (kWh)": "{:.1f}",
-            "Avg CO₂ (kg)":     "{:.1f}",
-            "Avg Water (L)":    "{:.1f}"
-        }),
-        use_container_width=True
+    # — Feature comparison across cities by class —
+    st.subheader("📊 Feature Comparison by Class Across Cities")
+    
+    # Define available metrics with proper display names and units
+    metrics = {
+        "Energy_Consumption": "Energy (kWh)",
+        "CO2_Usage": "CO₂ Emissions (kg)",
+        "Water_Usage": "Water Usage (L)"
+    }
+    
+    # UI Controls
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        comparison_type = st.radio(
+            "Select comparison type:",
+            ["Minimum Values", "Maximum Values", "Average Values"],
+            horizontal=True,
+            key="city_comparison_type"
+        )
+    with col2:
+        selected_metric = st.selectbox(
+            "Select metric to compare:",
+            options=list(metrics.keys()),
+            format_func=lambda x: metrics[x],
+            key="city_comparison_metric"
+        )
+    with col3:
+        use_log_scale = st.checkbox("Log scale", value=True, 
+                                   help="Logarithmic scale works better for data with large variations",
+                                   key="city_log_scale")
+    
+    # Add explanation about multi-feature classification
+    st.info(
+        "📊 **Note on Classification vs. Metrics:** Buildings are classified based on multiple features "
+        "(energy, CO₂, water usage), not just the selected metric. This means a Class B building might "
+        "have higher values in one metric than a Class C building, while performing better on other metrics. "
+        "These visualizations show actual metric values within each class, not the classification criteria."
     )
     
+    # Create dataframes to store the values
+    all_classes = sorted(set().union(*[set(df["class_label"]) for df in city_dfs.values()]))
+    
+    # Build the data for the visualization
+    comparison_data = []
+    
+    for city, city_df in city_dfs.items():
+        for cls in all_classes:
+            class_data = city_df[city_df["class_label"] == cls]
+            if not class_data.empty:
+                if comparison_type == "Minimum Values":
+                    value = class_data[selected_metric].min()
+                    type_label = "Min"
+                elif comparison_type == "Maximum Values":
+                    value = class_data[selected_metric].max()
+                    type_label = "Max"
+                else:  # Average Values
+                    value = class_data[selected_metric].mean()
+                    type_label = "Avg"
+                
+                comparison_data.append({
+                    "City": city,
+                    "Class": cls,
+                    "Value": value,
+                    "Metric": metrics[selected_metric]
+                })
+    
+    if comparison_data:
+        # Convert to DataFrame
+        comp_df = pd.DataFrame(comparison_data)
+        
+        # Create visualization
+        fig_comp = px.bar(
+            comp_df,
+            x="Class",
+            y="Value",
+            color="City",
+            barmode="group",
+            title=f"{type_label} {metrics[selected_metric]} by Class Across Cities",
+            labels={"Value": f"{type_label} {metrics[selected_metric]}"}
+        )
+        
+        if use_log_scale:
+            fig_comp.update_layout(yaxis_type="log")
+        
+        fig_comp.update_layout(height=500)
+        st.plotly_chart(fig_comp, use_container_width=True)
+        
+        # Optional detailed data table
+        if st.checkbox(f"Show detailed data for {type_label.lower()} {selected_metric}"):
+            # Pivot the data for better display
+            pivot_df = comp_df.pivot(index="Class", columns="City", values="Value")
+            st.dataframe(
+                pivot_df.style.format("{:,.2f}"),
+                use_container_width=True
+            )
+        
+        # Show best and worst cities for each class
+        st.subheader("🏆 Best Performing Cities by Class")
+        
+        # Prepare a summary table
+        summary_rows = []
+        for cls in all_classes:
+            cls_data = comp_df[comp_df["Class"] == cls]
+            if not cls_data.empty:
+                if comparison_type == "Minimum Values" or comparison_type == "Average Values":
+                    # For min and avg, lower is better
+                    best_city = cls_data.loc[cls_data["Value"].idxmin()]["City"]
+                    best_value = cls_data["Value"].min()
+                    worst_city = cls_data.loc[cls_data["Value"].idxmax()]["City"]
+                    worst_value = cls_data["Value"].max()
+                else:
+                    # For max, higher is better
+                    best_city = cls_data.loc[cls_data["Value"].idxmax()]["City"]
+                    best_value = cls_data["Value"].max()
+                    worst_city = cls_data.loc[cls_data["Value"].idxmin()]["City"]
+                    worst_value = cls_data["Value"].min()
+                
+                summary_rows.append({
+                    "Class": cls,
+                    "Best City": best_city,
+                    f"Best Value ({selected_metric})": best_value,
+                    "Worst City": worst_city,
+                    f"Worst Value ({selected_metric})": worst_value,
+                    "Difference (%)": ((worst_value - best_value) / best_value * 100) if best_value != 0 else 0
+                })
+        
+        if summary_rows:
+            summary_df = pd.DataFrame(summary_rows)
+            st.dataframe(
+                summary_df.style.format({
+                    f"Best Value ({selected_metric})": "{:,.2f}",
+                    f"Worst Value ({selected_metric})": "{:,.2f}",
+                    "Difference (%)": "{:+.1f}%"
+                }),
+                use_container_width=True
+            )
+    else:
+        st.warning("Not enough data to compare features across cities by class.")
 
-
+    st.markdown("---")
     
 st.markdown("""
     <div style="text-align: center; margin-top: 30px; padding: 10px; background-color: #f8f9fa; border-radius: 5px;">
