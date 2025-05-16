@@ -1,26 +1,3 @@
-#!/usr/bin/env python3
-"""
-compute_feature_ranges.py  ▸  v2
-
-Compute min / max (or any aggregation) of numeric features **per class label**.
-
-New in v2
----------
-* No need to hard-code a single `--class-col`. If you omit the flag we will
-  auto-detect all columns that start with ``class_`` — including the new
-  **Consensus** (``class_consensus``) and **TOPSIS** (``class_topsis``) — and
-  produce one output file *per* class column.
-* Optional ``--agg`` lets you choose ``minmax`` (default) or ``meanstd``.
-
-Examples
---------
-# legacy one-off
-python compute_feature_ranges.py -i city.parquet -c class_pca -f Energy_Consumption CO2_Usage -o ranges_pca.csv
-
-# auto-scan every class_*, save alongside input
-python compute_feature_ranges.py -i city.parquet -f Energy_Consumption CO2_Usage
-"""
-
 import argparse
 import sys
 from pathlib import Path
@@ -39,7 +16,7 @@ def compute_ranges(df: pd.DataFrame, features: List[str], class_col: str, mode: 
         agg = df.groupby(class_col)[features].agg(["min", "max"])
         agg.columns = [f"{feat}_{stat}" for feat, stat in agg.columns]
     elif mode == "meanstd":
-        agg = df.groupby(class_col)[features].agg(["mean", "std"])
+        agg = df.groupby(class_col)[features].agg(["min", "mean", "max", "std"])
         agg.columns = [f"{feat}_{stat}" for feat, stat in agg.columns]
     else:
         raise ValueError("mode must be 'minmax' or 'meanstd'")
@@ -49,6 +26,11 @@ def compute_ranges(df: pd.DataFrame, features: List[str], class_col: str, mode: 
 # ──────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────
+
+def _compute(df: pd.DataFrame, features: List[str], class_col: str, agg_mode: str) -> pd.DataFrame:
+    """Compute statistical measures for each class and feature."""
+    return compute_ranges(df, features, class_col, agg_mode)
+
 
 def main() -> None:
     p = argparse.ArgumentParser("Compute feature ranges (or mean/std) by class label")
@@ -84,7 +66,7 @@ def main() -> None:
     # Output pattern handling
     if args.output:
         out_path = Path(args.output)
-        if len(class_cols) > 1 and not out_path.stem.endswith("{col}"):
+        if len(class_cols) > 1 and "{col}" not in str(out_path):
             # allow pattern like ranges_{col}.csv
             print("✱ Multiple class columns detected; appending column name to output file.")
             out_pattern = out_path.with_stem(out_path.stem + "_{col}")
@@ -99,7 +81,7 @@ def main() -> None:
         out_df = _compute(df, args.features, c, args.agg)
         dest = Path(str(out_pattern).format(col=c))
         out_df.to_csv(dest, index=False)
-        print(f"✅ Saved ranges for {c} → {dest}")
+        print(f" Saved ranges for {c} → {dest}")
 
 
 if __name__ == "__main__":

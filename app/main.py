@@ -569,86 +569,110 @@ with tab5:
 
     st.header("📊 City Statistics by Feature & Class")
 
-    # 1) Pick method & class
-    methods = {
-        "PCA"        : "class_pca",
-        "Manhattan"  : "class_manhattan",
-        "Mahalanobis": "class_mahalanobis",
-        "Weighted"   : "class_weighted",
-        "Bayesian"   : "class_bayesian",
-        "Topsis"     : "class_topsis",
-    }
-    method_name    = st.selectbox("Classification Method", list(methods))
-    class_col      = methods[method_name]
-    classes        = sorted(st.session_state["df"][class_col].dropna().unique())
-    selected_class = st.selectbox("Energy Class", classes)
+# 1) Pick method & class
+methods = {
+    "PCA"        : "class_pca",
+    "Manhattan"  : "class_manhattan",
+    "Mahalanobis": "class_mahalanobis",
+    "Weighted"   : "class_weighted",
+    "Bayesian"   : "class_bayesian",
+    "Topsis"     : "class_topsis",
+}
+method_name = st.selectbox("Classification Method", list(methods))
+class_col = methods[method_name]
+classes = sorted(st.session_state["df"][class_col].dropna().unique())
+selected_class = st.selectbox("Energy Class", classes)
 
-    # 2) Features split
-    consumption_feats = {
-        "Energy_Consumption": "Energy (kWh)",
-        "CO2_Usage":          "CO₂ (kg)",
-        "Water_Usage":        "Water (L)"
-    }
-    intensity_feats = {
-        "Energy_Intensity": "Energy Intensity (kWh/m²)",
-        "CO2_Intensity":    "CO₂ Intensity (kg/m²)"
-    }
+# 2) Features split
+consumption_feats = {
+    "Energy_Consumption": "Energy (kWh)",
+    "CO2_Usage":          "CO₂ (kg)",
+    "Water_Usage":        "Water (L)"
+}
+intensity_feats = {
+    "Energy_Intensity": "Energy Intensity (kWh/m²)",
+    "CO2_Intensity":    "CO₂ Intensity (kg/m²)"
+}
 
-    dfc = st.session_state["df"]
-    dfc = dfc[dfc[class_col] == selected_class]
+# Filter data for selected class
+dfc = st.session_state["df"]
+dfc = dfc[dfc[class_col] == selected_class]
 
-    def compute_stats(feat_map):
-        rows = []
-        for feat, label in feat_map.items():
-            if feat not in dfc.columns:
-                continue
-            mn  = dfc[feat].min()
-            mx  = dfc[feat].max()
-            avg = dfc[feat].mean()
-            rows.append({
-                "Feature": label,
-                "Min":     mn,
-                "Mean":    avg,
-                "Max":     mx
-            })
-        return pd.DataFrame(rows)
+def compute_stats(feat_map):
+    rows = []
+    for feat, label in feat_map.items():
+        if feat not in dfc.columns:
+            continue
+        mn = dfc[feat].min()
+        mx = dfc[feat].max()
+        avg = dfc[feat].mean()
+        std = dfc[feat].std()  # Added standard deviation
+        rows.append({
+            "Feature": label,
+            "Min": mn,
+            "Mean": avg,
+            "Max": mx,
+            "Std": std  # Added standard deviation
+        })
+    return pd.DataFrame(rows)
 
-    # 3) Consumption stats & chart
-    cons_df = compute_stats(consumption_feats)
-    st.subheader(f"🛢️ Consumption Stats for Class {selected_class} ({method_name})")
-    st.table(cons_df.style.format({"Min":"{:.1f}","Mean":"{:.1f}","Max":"{:.1f}"}))
+# 3) Consumption stats & chart
+cons_df = compute_stats(consumption_feats)
+st.subheader(f"🛢️ Consumption Stats for Class {selected_class} ({method_name})")
+st.table(cons_df[["Feature", "Min", "Mean", "Max", "Std"]].style.format({
+    "Min": "{:.1f}",
+    "Mean": "{:.1f}",
+    "Max": "{:.1f}",
+    "Std": "{:.2f}"  # Format for standard deviation
+}))
 
-    fig1 = px.bar(
-        cons_df.melt(id_vars="Feature", var_name="Stat", value_name="Value"),
+# For chart, we'll use min, mean, max (standard deviation used for error bars)
+chart_df = cons_df[["Feature", "Min", "Mean", "Max"]].melt(
+    id_vars="Feature", var_name="Stat", value_name="Value"
+)
+
+fig1 = px.bar(
+    chart_df,
+    x="Value", y="Feature", color="Stat",
+    barmode="group", text="Value",
+    color_discrete_map={"Min":"#A6A6A6","Mean":"#1F78B4","Max":"#333333"},
+    labels={"Value":"Usage","Feature":""},
+    title="Consumption: Min vs Mean vs Max",
+    error_y=None  # We'll add custom error bars if needed
+)
+fig1.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+fig1.update_layout(margin=dict(l=150, r=20, t=50, b=20), height=350)
+st.plotly_chart(fig1, use_container_width=True)
+
+# 4) Intensity stats & chart (if available)
+int_df = compute_stats(intensity_feats)
+if not int_df.empty:
+    st.subheader(f"📐 Intensity Stats for Class {selected_class} ({method_name})")
+    st.table(int_df[["Feature", "Min", "Mean", "Max", "Std"]].style.format({
+        "Min": "{:.2f}",
+        "Mean": "{:.2f}",
+        "Max": "{:.2f}",
+        "Std": "{:.2f}"  # Format for standard deviation
+    }))
+    
+    # For chart, similar to above
+    int_chart_df = int_df[["Feature", "Min", "Mean", "Max"]].melt(
+        id_vars="Feature", var_name="Stat", value_name="Value"
+    )
+    
+    fig2 = px.bar(
+        int_chart_df,
         x="Value", y="Feature", color="Stat",
         barmode="group", text="Value",
-        color_discrete_map={"Min":"#A6A6A6","Mean":"#1F78B4","Max":"#333333"},
-        labels={"Value":"Usage","Feature":""},
-        title="Consumption: Min vs Mean vs Max"
+        color_discrete_map={"Min":"#A6A6A6","Mean":"#33A02C","Max":"#333333"},
+        labels={"Value":"Intensity","Feature":""},
+        title="Intensity: Min vs Mean vs Max"
     )
-    fig1.update_traces(texttemplate="%{text:.1f}", textposition="outside")
-    fig1.update_layout(margin=dict(l=150, r=20, t=50, b=20), height=350)
-    st.plotly_chart(fig1, use_container_width=True)
-
-    # 4) Intensity stats & chart (if available)
-    int_df = compute_stats(intensity_feats)
-    if not int_df.empty:
-        st.subheader(f"📐 Intensity Stats for Class {selected_class} ({method_name})")
-        st.table(int_df.style.format({"Min":"{:.2f}","Mean":"{:.2f}","Max":"{:.2f}"}))
-
-        fig2 = px.bar(
-            int_df.melt(id_vars="Feature", var_name="Stat", value_name="Value"),
-            x="Value", y="Feature", color="Stat",
-            barmode="group", text="Value",
-            color_discrete_map={"Min":"#A6A6A6","Mean":"#33A02C","Max":"#333333"},
-            labels={"Value":"Intensity","Feature":""},
-            title="Intensity: Min vs Mean vs Max"
-        )
-        fig2.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-        fig2.update_layout(margin=dict(l=200, r=20, t=50, b=20), height=300)
-        st.plotly_chart(fig2, use_container_width=True)
-    else:
-        st.info("No intensity columns found; showing consumption only.")
+    fig2.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+    fig2.update_layout(margin=dict(l=200, r=20, t=50, b=20), height=300)
+    st.plotly_chart(fig2, use_container_width=True)
+else:
+    st.info("No intensity columns found; showing consumption only.")
 
 with tab6:
     st.header("📊 Year-over-Year Comparison")
