@@ -5,7 +5,7 @@ from datetime import datetime
 import logging
 # Configure logging to suppress INFO messages from pgmpy
 logging.getLogger('pgmpy').setLevel(logging.WARNING)
-
+from data.dataprocessing import process_city_data
 pd.set_option("styler.render.max_elements", 500_000)  
 
 from models.mahalanobis import classify_mahalanobis
@@ -58,59 +58,87 @@ if 'comparison_buildings' not in st.session_state:
 # Sidebar configuration
 with st.sidebar:
     st.title("Dashboard Controls")
-    
-    # Dataset selection
     st.header("📊 Dataset Selection")
+
+    # ── 0) Initialize session_state stores ──
+    if "cities" not in st.session_state:
+        st.session_state["cities"] = ["Lyon", "Gordes"]
+    if "uploaded_dfs" not in st.session_state:
+        st.session_state["uploaded_dfs"] = {}
+
+    # ── 1) Build selectbox choices ──
+    choices = st.session_state["cities"] + ["Upload Custom Dataset"]
     dataset_option = st.selectbox(
         "Choose Dataset",
-        ["Default (Lyon)", "Gordes", "Upload Custom Dataset"],
+        choices,
         key="dataset_option"
     )
-    
-    uploaded_file = None
+
+    # ── 2) Handle upload branch ──
     if dataset_option == "Upload Custom Dataset":
-        uploaded_file = st.file_uploader("Upload CSV file", type=["csv"])
-    
-    # Load and validate dataset
-    if dataset_option == "Default (Lyon)":
-        with st.spinner("Loading Lyon data..."):
-            df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
-            df = df[df["year"] == datetime.now().year]  # ✨ Keep only current year
+        uploaded_file = st.file_uploader(
+            "Upload CSV file",
+            type=["csv"],
+            key="upload_custom_csv"
+        )
+        if not uploaded_file:
+            st.info("Please upload a CSV file to proceed.")
+            st.stop()
+
+        # suggest a name (filename without extension)
+        default_name = Path(uploaded_file.name).stem
+        custom_name = st.text_input(
+            "Name this dataset:",
+            value=default_name,
+            key="custom_dataset_name"
+        )
+
+        with st.spinner("Processing uploaded dataset…"):
+            try:
+                df = process_city_data(
+                    city_name=custom_name,
+                    input_source=uploaded_file,
+                    year=None  # will preserve any existing 'year' column
+                )
+            except Exception as e:
+                st.error(f"Could not process upload: {e}")
+                st.stop()
+
+        # store both name & DataFrame
+        if custom_name not in st.session_state["cities"]:
+            st.session_state["cities"].append(custom_name)
+        st.session_state["uploaded_dfs"][custom_name] = df
+
+        selected_city = custom_name
+
+    else:
+        # ── 3) Non-upload branch: default or previously uploaded ──
+        if dataset_option in st.session_state["uploaded_dfs"]:
+            # a custom upload we did earlier
+            df = st.session_state["uploaded_dfs"][dataset_option]
+            selected_city = dataset_option
+
+        elif dataset_option == "Lyon":
+            with st.spinner("Loading Lyon data…"):
+                df_all = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
+                df = df_all[df_all["year"] == datetime.now().year]
             selected_city = "Lyon"
 
-    elif dataset_option == "Gordes":
-        with st.spinner("Loading Gordes data..."):
-            try:
-                df = pd.read_csv("data/reduced_gordes_buildings_all_years.csv")
-                df = df[df["year"] == datetime.now().year]
-                selected_city = "Gordes"
-            except FileNotFoundError:
-                st.error("Gordes dataset file 'data/reduced_gordes_buildings_all_years.csv' not found.")
-                df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
-                selected_city = "Lyon"
-                st.warning("Reverted to default Lyon dataset")
-                st.write(f"Fallback dataset: {selected_city}")  # Debug
-    else:  # Upload Custom Dataset
-        if uploaded_file is not None:
-            with st.spinner("Loading uploaded dataset..."):
+        elif dataset_option == "Gordes":
+            with st.spinner("Loading Gordes data…"):
                 try:
-                    df = pd.read_csv(uploaded_file)
-                    df = df[df["year"] == datetime.now().year]
-                    selected_city = "Custom Dataset"
-                except Exception as e:
-                    st.error(f"Error loading CSV file: {str(e)}")
-                    df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
-                    df = df[df["year"] == datetime.now().year]
-                    selected_city = "Lyon"
-                    st.warning("Reverted to default Lyon dataset")
-                    st.write(f"Fallback dataset: {selected_city}")  # Debug
+                    df_all = pd.read_csv("data/reduced_gordes_buildings_all_years.csv")
+                except FileNotFoundError:
+                    st.error("Gordes dataset not found; loading Lyon instead.")
+                    df_all = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
+                df = df_all[df_all["year"] == datetime.now().year]
+            selected_city = "Gordes"
+
         else:
-            st.info("Please upload a CSV file to proceed.")
-            df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
-            df = df[df["year"] == datetime.now().year]
-            selected_city = "Lyon"
-            st.write(f"Using default dataset: {selected_city}")  # Debug
-            
+            # should never happen, but fallback
+            st.error(f"Unknown dataset option: {dataset_option}")
+            st.stop()
+    st.write(f"Selected city: **{selected_city}**")  
     # Scoring basis
     st.subheader("Scoring Basis")
     scoring_basis = st.radio(
@@ -569,206 +597,196 @@ with tab5:
 
     st.header("📊 City Statistics by Feature & Class")
 
-# 1) Pick method & class
-methods = {
-    "PCA"        : "class_pca",
-    "Manhattan"  : "class_manhattan",
-    "Mahalanobis": "class_mahalanobis",
-    "Weighted"   : "class_weighted",
-    "Bayesian"   : "class_bayesian",
-    "Topsis"     : "class_topsis",
-}
-method_name = st.selectbox("Classification Method", list(methods))
-class_col = methods[method_name]
-classes = sorted(st.session_state["df"][class_col].dropna().unique())
-selected_class = st.selectbox("Energy Class", classes)
+    # 1) Pick method & class
+    methods = {
+        "PCA"        : "class_pca",
+        "Manhattan"  : "class_manhattan",
+        "Mahalanobis": "class_mahalanobis",
+        "Weighted"   : "class_weighted",
+        "Bayesian"   : "class_bayesian",
+        "Topsis"     : "class_topsis",
+    }
+    method_name = st.selectbox("Classification Method", list(methods))
+    class_col = methods[method_name]
+    classes = sorted(st.session_state["df"][class_col].dropna().unique())
+    selected_class = st.selectbox("Energy Class", classes)
 
-# 2) Features split
-consumption_feats = {
-    "Energy_Consumption": "Energy (kWh)",
-    "CO2_Usage":          "CO₂ (kg)",
-    "Water_Usage":        "Water (L)"
-}
-intensity_feats = {
-    "Energy_Intensity": "Energy Intensity (kWh/m²)",
-    "CO2_Intensity":    "CO₂ Intensity (kg/m²)"
-}
+    # 2) Features split
+    consumption_feats = {
+        "Energy_Consumption": "Energy (kWh)",
+        "CO2_Usage":          "CO₂ (kg)",
+        "Water_Usage":        "Water (L)"
+    }
+    intensity_feats = {
+        "Energy_Intensity": "Energy Intensity (kWh/m²)",
+        "CO2_Intensity":    "CO₂ Intensity (kg/m²)"
+    }
 
-# Filter data for selected class
-dfc = st.session_state["df"]
-dfc = dfc[dfc[class_col] == selected_class]
+    # Filter data for selected class
+    dfc = st.session_state["df"]
+    dfc = dfc[dfc[class_col] == selected_class]
 
-def compute_stats(feat_map):
-    rows = []
-    for feat, label in feat_map.items():
-        if feat not in dfc.columns:
-            continue
-        mn = dfc[feat].min()
-        mx = dfc[feat].max()
-        avg = dfc[feat].mean()
-        std = dfc[feat].std()  # Added standard deviation
-        rows.append({
-            "Feature": label,
-            "Min": mn,
-            "Mean": avg,
-            "Max": mx,
-            "Std": std  # Added standard deviation
-        })
-    return pd.DataFrame(rows)
+    def compute_stats(feat_map):
+        rows = []
+        for feat, label in feat_map.items():
+            if feat not in dfc.columns:
+                continue
+            mn = dfc[feat].min()
+            mx = dfc[feat].max()
+            avg = dfc[feat].mean()
+            std = dfc[feat].std()  # Added standard deviation
+            rows.append({
+                "Feature": label,
+                "Min": mn,
+                "Mean": avg,
+                "Max": mx,
+                "Std": std  # Added standard deviation
+            })
+        return pd.DataFrame(rows)
 
-# 3) Consumption stats & chart
-cons_df = compute_stats(consumption_feats)
-st.subheader(f"🛢️ Consumption Stats for Class {selected_class} ({method_name})")
-st.table(cons_df[["Feature", "Min", "Mean", "Max", "Std"]].style.format({
-    "Min": "{:.1f}",
-    "Mean": "{:.1f}",
-    "Max": "{:.1f}",
-    "Std": "{:.2f}"  # Format for standard deviation
-}))
-
-# For chart, we'll use min, mean, max (standard deviation used for error bars)
-chart_df = cons_df[["Feature", "Min", "Mean", "Max"]].melt(
-    id_vars="Feature", var_name="Stat", value_name="Value"
-)
-
-fig1 = px.bar(
-    chart_df,
-    x="Value", y="Feature", color="Stat",
-    barmode="group", text="Value",
-    color_discrete_map={"Min":"#A6A6A6","Mean":"#1F78B4","Max":"#333333"},
-    labels={"Value":"Usage","Feature":""},
-    title="Consumption: Min vs Mean vs Max",
-    error_y=None  # We'll add custom error bars if needed
-)
-fig1.update_traces(texttemplate="%{text:.1f}", textposition="outside")
-fig1.update_layout(margin=dict(l=150, r=20, t=50, b=20), height=350)
-st.plotly_chart(fig1, use_container_width=True)
-
-# 4) Intensity stats & chart (if available)
-int_df = compute_stats(intensity_feats)
-if not int_df.empty:
-    st.subheader(f"📐 Intensity Stats for Class {selected_class} ({method_name})")
-    st.table(int_df[["Feature", "Min", "Mean", "Max", "Std"]].style.format({
-        "Min": "{:.2f}",
-        "Mean": "{:.2f}",
-        "Max": "{:.2f}",
+    # 3) Consumption stats & chart
+    cons_df = compute_stats(consumption_feats)
+    st.subheader(f"🛢️ Consumption Stats for Class {selected_class} ({method_name})")
+    st.table(cons_df[["Feature", "Min", "Mean", "Max", "Std"]].style.format({
+        "Min": "{:.1f}",
+        "Mean": "{:.1f}",
+        "Max": "{:.1f}",
         "Std": "{:.2f}"  # Format for standard deviation
     }))
-    
-    # For chart, similar to above
-    int_chart_df = int_df[["Feature", "Min", "Mean", "Max"]].melt(
+
+    # For chart, we'll use min, mean, max (standard deviation used for error bars)
+    chart_df = cons_df[["Feature", "Min", "Mean", "Max"]].melt(
         id_vars="Feature", var_name="Stat", value_name="Value"
     )
-    
-    fig2 = px.bar(
-        int_chart_df,
+
+    fig1 = px.bar(
+        chart_df,
         x="Value", y="Feature", color="Stat",
         barmode="group", text="Value",
-        color_discrete_map={"Min":"#A6A6A6","Mean":"#33A02C","Max":"#333333"},
-        labels={"Value":"Intensity","Feature":""},
-        title="Intensity: Min vs Mean vs Max"
+        color_discrete_map={"Min":"#A6A6A6","Mean":"#1F78B4","Max":"#333333"},
+        labels={"Value":"Usage","Feature":""},
+        title="Consumption: Min vs Mean vs Max",
+        error_y=None  # We'll add custom error bars if needed
     )
-    fig2.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-    fig2.update_layout(margin=dict(l=200, r=20, t=50, b=20), height=300)
-    st.plotly_chart(fig2, use_container_width=True)
-else:
-    st.info("No intensity columns found; showing consumption only.")
+    fig1.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+    fig1.update_layout(margin=dict(l=150, r=20, t=50, b=20), height=350)
+    st.plotly_chart(fig1, use_container_width=True)
+
+    # 4) Intensity stats & chart (if available)
+    int_df = compute_stats(intensity_feats)
+    if not int_df.empty:
+        st.subheader(f"📐 Intensity Stats for Class {selected_class} ({method_name})")
+        st.table(int_df[["Feature", "Min", "Mean", "Max", "Std"]].style.format({
+            "Min": "{:.2f}",
+            "Mean": "{:.2f}",
+            "Max": "{:.2f}",
+            "Std": "{:.2f}"  # Format for standard deviation
+        }))
+        
+        # For chart, similar to above
+        int_chart_df = int_df[["Feature", "Min", "Mean", "Max"]].melt(
+            id_vars="Feature", var_name="Stat", value_name="Value"
+        )
+        
+        fig2 = px.bar(
+            int_chart_df,
+            x="Value", y="Feature", color="Stat",
+            barmode="group", text="Value",
+            color_discrete_map={"Min":"#A6A6A6","Mean":"#33A02C","Max":"#333333"},
+            labels={"Value":"Intensity","Feature":""},
+            title="Intensity: Min vs Mean vs Max"
+        )
+        fig2.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+        fig2.update_layout(margin=dict(l=200, r=20, t=50, b=20), height=300)
+        st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("No intensity columns found; showing consumption only.")
 
 with tab6:
     st.header("📊 Year-over-Year Comparison")
 
-    # — 1) Reload and preprocess the full “all years” dataset —
-    df_all = pd.read_csv(CITY_PATHS[selected_city])
+    # 1) Load the full historical dataset
+    if selected_city in st.session_state.get("uploaded_dfs", {}):
+        df_all = st.session_state["uploaded_dfs"][selected_city]
+    else:
+        df_all = pd.read_csv(CITY_PATHS[selected_city])
+
+    # 2) Validate & preprocess the entire dataset
     df_all = validate_and_preprocess_dataset(df_all, scoring_basis)
     if df_all is None or df_all.empty:
         st.error("Unable to load full historical data for year-over-year comparison.")
         st.stop()
 
-    # — 2) Re-run classification on the full dataset —
-    # (so that we have a `class_label` column)
+    # 3) Ensure we have all class_* columns
     df_all = ensure_classifications(df_all, selected_features, weights)
 
-
+    # 4) Re-apply classification method across all years
     if classification_method == "Manhattan Distance":
         from models.manhattan import classify_manhattan
         df_all = classify_manhattan(df_all, features=selected_features)
         col = "class_manhattan"
-
     elif classification_method == "Mahalanobis Distance":
         from models.mahalanobis import classify_mahalanobis
         df_all = classify_mahalanobis(df_all, features=selected_features, return_distance=True)
         col = "class_mahalanobis"
-
     elif classification_method == "PCA Classification":
         from models.pca import classify_pca
         df_all = classify_pca(df_all, features=selected_features)
         col = "class_pca"
-
     elif classification_method == "Weighted Classification":
         from models.weighted import classify_weighted
         df_all = classify_weighted(df_all, features=selected_features, weights=weights)
         col = "class_weighted"
-
     elif classification_method == "Topsis":
         from models.topsis import classify_topsis
         df_all = classify_topsis(df_all, features=selected_features, weights=weights)
         col = "class_topsis"
-    else:  # Bayesian Classification
+    else:  # Bayesian
         from models.bayesian import classify_bayesian
         df_all = classify_bayesian(df_all, features=selected_features)
         col = "class_bayesian"
-
     df_all["class_label"] = df_all[col]
 
-
-    # — 3) Compute counts by class and year —
-    counts = df_all.groupby(["class_label", "year"]).size().unstack(fill_value=0).sort_index(axis=1)
+    # 5) Counts by class & year
+    counts = (
+        df_all
+        .groupby(["class_label", "year"])
+        .size()
+        .unstack(fill_value=0)
+        .sort_index(axis=1)
+    )
     st.subheader("Building Counts by Class and Year")
-    st.dataframe(counts.style.format("{:,}"))
+    st.dataframe(counts)
 
-    # — 4) Grouped bar chart comparing values by class across years —
-    import plotly.graph_objects as go
     years_present = list(counts.columns)
-    
-    # Create DataFrames to store min, max, and avg values for each metric, class and year
+
+    # 6) Prepare min/max/avg tables
     metrics = {
         "Energy_Consumption": "Energy (kWh)",
-        "CO2_Usage": "CO₂ Emissions (kg)",
-        "Water_Usage": "Water Usage (L)"
+        "CO2_Usage":          "CO₂ Emissions (kg)",
+        "Water_Usage":        "Water Usage (L)"
     }
-    
-    # Dictionary to hold all data frames
     data_frames = {
-        "Energy_Consumption": {
-            "min": pd.DataFrame(index=counts.index, columns=years_present),
-            "max": pd.DataFrame(index=counts.index, columns=years_present),
-            "avg": pd.DataFrame(index=counts.index, columns=years_present)
-        },
-        "CO2_Usage": {
-            "min": pd.DataFrame(index=counts.index, columns=years_present),
-            "max": pd.DataFrame(index=counts.index, columns=years_present),
-            "avg": pd.DataFrame(index=counts.index, columns=years_present)
-        },
-        "Water_Usage": {
+        m: {
             "min": pd.DataFrame(index=counts.index, columns=years_present),
             "max": pd.DataFrame(index=counts.index, columns=years_present),
             "avg": pd.DataFrame(index=counts.index, columns=years_present)
         }
+        for m in metrics
     }
-    
-    # Calculate min, max, and average values for each metric, class and year
+
     for yr in years_present:
-        year_data = df_all[df_all["year"] == yr]
+        df_y = df_all[df_all["year"] == yr]
         for cls in counts.index:
-            class_data = year_data[year_data["class_label"] == cls]
-            if not class_data.empty:
-                for metric in metrics.keys():
-                    data_frames[metric]["min"].loc[cls, yr] = class_data[metric].min()
-                    data_frames[metric]["max"].loc[cls, yr] = class_data[metric].max()
-                    data_frames[metric]["avg"].loc[cls, yr] = class_data[metric].mean()
-    
-    # Let user choose comparison type, metric and scale
-    col1, col2, col3 = st.columns([2, 2, 1])
+            df_c = df_y[df_y["class_label"] == cls]
+            if not df_c.empty:
+                for m in metrics:
+                    data_frames[m]["min"].loc[cls, yr] = df_c[m].min()
+                    data_frames[m]["max"].loc[cls, yr] = df_c[m].max()
+                    data_frames[m]["avg"].loc[cls, yr] = df_c[m].mean()
+
+    # 7) User controls
+    col1, col2, col3 = st.columns([2,2,1])
     with col1:
         comparison_type = st.radio(
             "Select comparison type:",
@@ -782,190 +800,51 @@ with tab6:
             format_func=lambda x: metrics[x]
         )
     with col3:
-        use_log_scale = st.checkbox("Use log scale", value=True, 
-                                  help="Logarithmic scale works better for data with large variations")
-    
-    # Add explanation about multi-feature classification
-    if comparison_type != "Building Counts":
-        st.info(
-            "📊 **Note on Classification vs. Metrics:** Buildings are classified based on multiple features "
-            "(energy, CO₂, water usage), not just the selected metric. This means a Class B building might "
-            "have higher values in one metric than a Class C building, while performing better on other metrics. "
-            "These visualizations show actual metric values within each class, not the classification criteria."
+        use_log = st.checkbox(
+            "Use log scale", value=True,
+            help="Log scale helps when values vary widely"
         )
 
-    # Show the appropriate visualization based on user selection
-    
-    if comparison_type == "Minimum Values":
-        # Get relevant dataframe
-        values_df = data_frames[selected_metric]["min"]
-        unit = metrics[selected_metric].split('(')[1].strip(')')
-        
-        # Create figure for values
-        fig_values = go.Figure()
-        for yr in years_present:
-            # Convert to numeric and handle NaN values safely
-            y_values = pd.to_numeric(values_df[yr], errors='coerce').fillna(0)
-            # Format text to handle large numbers nicely
-            text_values = [f"{v:,.1f}" for v in y_values]
-            
-            fig_values.add_trace(go.Bar(
-                name=f"{yr}",
-                x=values_df.index,
-                y=y_values,
-                text=text_values,
-                textposition="auto"
-            ))
-        
-        fig_values.update_layout(
-            barmode="group",
-            title=f"Minimum {metrics[selected_metric]} by Class Across Years",
-            xaxis_title="Energy Class",
-            yaxis_title=f"Min {metrics[selected_metric]}",
-            legend_title="Year",
-            height=500,
-        )
-        
-        if use_log_scale:
-            fig_values.update_layout(yaxis_type="log")
-            
-        st.plotly_chart(fig_values, use_container_width=True)
-        
-        # Add table view option for detailed comparison
-        if st.checkbox(f"Show detailed data for minimum {selected_metric}"):
-            st.dataframe(
-                values_df.style.format("{:,.2f}"),
-                use_container_width=True
-            )
-    
-    elif comparison_type == "Maximum Values":
-        # Get relevant dataframe
-        values_df = data_frames[selected_metric]["max"]
-        unit = metrics[selected_metric].split('(')[1].strip(')')
-        
-        # Create figure for values
-        fig_values = go.Figure()
-        for yr in years_present:
-            # Convert to numeric and handle NaN values safely
-            y_values = pd.to_numeric(values_df[yr], errors='coerce').fillna(0)
-            # Format text to handle large numbers nicely
-            text_values = [f"{v:,.1f}" for v in y_values]
-            
-            fig_values.add_trace(go.Bar(
-                name=f"{yr}",
-                x=values_df.index,
-                y=y_values,
-                text=text_values,
-                textposition="auto"
-            ))
-        
-        fig_values.update_layout(
-            barmode="group",
-            title=f"Maximum {metrics[selected_metric]} by Class Across Years",
-            xaxis_title="Energy Class",
-            yaxis_title=f"Max {metrics[selected_metric]}",
-            legend_title="Year",
-            height=500,
-        )
-        
-        if use_log_scale:
-            fig_values.update_layout(yaxis_type="log")
-            
-        st.plotly_chart(fig_values, use_container_width=True)
-        
-        # Add table view option for detailed comparison
-        if st.checkbox(f"Show detailed data for maximum {selected_metric}"):
-            st.dataframe(
-                values_df.style.format("{:,.2f}"),
-                use_container_width=True
-            )
-    
-    else:  # Average Values
-        # Get relevant dataframe
-        values_df = data_frames[selected_metric]["avg"]
-        unit = metrics[selected_metric].split('(')[1].strip(')')
-        
-        # Create figure for values
-        fig_values = go.Figure()
-        for yr in years_present:
-            # Convert to numeric and handle NaN values safely
-            y_values = pd.to_numeric(values_df[yr], errors='coerce').fillna(0)
-            # Format text to handle large numbers nicely
-            text_values = [f"{v:,.1f}" for v in y_values]
-            
-            fig_values.add_trace(go.Bar(
-                name=f"{yr}",
-                x=values_df.index,
-                y=y_values,
-                text=text_values,
-                textposition="auto"
-            ))
-        
-        fig_values.update_layout(
-            barmode="group",
-            title=f"Average {metrics[selected_metric]} by Class Across Years",
-            xaxis_title="Energy Class",
-            yaxis_title=f"Avg {metrics[selected_metric]}",
-            legend_title="Year",
-            height=500,
-        )
-        
-        if use_log_scale:
-            fig_values.update_layout(yaxis_type="log")
-            
-        st.plotly_chart(fig_values, use_container_width=True)
-        
-        # Add table view option for detailed comparison
-        if st.checkbox(f"Show detailed data for average {selected_metric}"):
-            st.dataframe(
-                values_df.style.format("{:,.2f}"),
-                use_container_width=True
-            )
-    
-    # Show comparison between highest class (A) and lowest class (F)
-    if comparison_type != "Building Counts" and "A" in counts.index and "F" in counts.index:
-        st.subheader("Class A vs F Comparison")
-        
-        # Get the currently selected values dataframe
-        if comparison_type == "Minimum Values":
-            values_df = data_frames[selected_metric]["min"]
-            metric_name = f"Min {selected_metric}"
-        elif comparison_type == "Maximum Values":
-            values_df = data_frames[selected_metric]["max"]
-            metric_name = f"Max {selected_metric}"
-        else:
-            values_df = data_frames[selected_metric]["avg"]
-            metric_name = f"Avg {selected_metric}"
-        
-        unit = metrics[selected_metric].split('(')[1].strip(')')
-        
-        # Calculate A-F ratio for each year
-        ratio_data = []
-        for yr in years_present:
-            class_a = pd.to_numeric(values_df.loc["A", yr], errors='coerce')
-            class_f = pd.to_numeric(values_df.loc["F", yr], errors='coerce')
-            if not pd.isna(class_a) and not pd.isna(class_f) and class_f != 0:
-                ratio = class_a / class_f
-                ratio_data.append({
-                    "Year": yr,
-                    f"Class A ({unit})": class_a,
-                    f"Class F ({unit})": class_f,
-                    "A:F Ratio": ratio
-                })
-        
-        if ratio_data:
-            ratio_df = pd.DataFrame(ratio_data)
-            cols = st.columns(len(ratio_df))
-            for i, (_, row) in enumerate(ratio_df.iterrows()):
-                with cols[i]:
-                    st.metric(
-                        f"Year {row['Year']}",
-                        f"{row['A:F Ratio']:.2f}x",
-                        help=f"Class A: {row[f'Class A ({unit})']:,.2f} {unit} vs Class F: {row[f'Class F ({unit})']:,.2f} {unit}"
-                    )
-                    st.caption(f"{metric_name} - A to F ratio")
-        else:
-            st.info("Not enough data to calculate A-F comparison")
+    # Map the user label to our dict key
+    key_map = {
+        "Minimum Values": "min",
+        "Maximum Values": "max",
+        "Average Values": "avg"
+    }
+    key = key_map[comparison_type]
+    values_df = data_frames[selected_metric][key]
+
+    # 8) Plot grouped bar chart
+    import plotly.graph_objects as go
+    title_map = {"min": "Minimum", "max": "Maximum", "avg": "Average"}
+
+    fig = go.Figure()
+    for yr in years_present:
+        yv = pd.to_numeric(values_df[yr], errors="coerce").fillna(0)
+        fig.add_trace(go.Bar(
+            name=str(yr),
+            x=values_df.index,
+            y=yv,
+            text=[f"{v:,.1f}" for v in yv],
+            textposition="auto"
+        ))
+
+    fig.update_layout(
+        barmode="group",
+        title=f"{title_map[key]} {metrics[selected_metric]} by Class Across Years",
+        xaxis_title="Energy Class",
+        yaxis_title=f"{title_map[key]} {metrics[selected_metric]}",
+        legend_title="Year",
+        height=500
+    )
+    if use_log:
+        fig.update_layout(yaxis_type="log")
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # 9) Detailed table toggle
+    if st.checkbox(f"Show detailed data for {title_map[key].lower()} {selected_metric}"):
+        st.dataframe(values_df.style.format("{:,.2f}"), use_container_width=True)
 
 with tab7:
     import pandas as pd
