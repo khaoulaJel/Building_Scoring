@@ -101,7 +101,13 @@ def display_building_classifications(
         "E": "#e74c3c",
         "F": "#c0392b"
     }
-    class_cols = [c for c in df.columns if c.startswith("class_")]
+
+    class_cols = [
+    c for c in df.columns
+    if c.startswith("class_")
+    and c != "class_label"
+]
+
     methods = [
         (col.replace("class_", "").title(), bd[col])
         for col in class_cols
