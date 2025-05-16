@@ -1,8 +1,32 @@
+# This file controls the behavior and appearance of your Streamlit application
+
+# Theme Configuration
+# Controls the visual appearance of the Streamlit app
 [theme]
+# Base theme - "dark" theme gives a dark background with light text
 base="dark"
+
+# Primary color used for interactive elements like buttons, sliders, etc.
+# #FF4B4B is a bright red color that creates strong visual cues
 primaryColor="#FF4B4B"
+
+# Main background color of the application
+# #0E1117 is a very dark blue-black shade
 backgroundColor="#0E1117"
+
+# Background color for cards, sidebars, and other secondary elements
+# #262730 is a dark gray with slight blue tint, lighter than the main background
 secondaryBackgroundColor="#262730"
 
+# Server Configuration
+# Controls how the Streamlit server behaves
 [server]
+# When set to true, Streamlit will automatically re-run your app when you save changes to the script
+# This is useful during development as you can see changes immediately
 runOnSave = true
+
+# Note: Other common server configurations you might want to add:
+# port = 8501            # Default port Streamlit runs on
+# headless = false       # Set to true for no browser opening on startup
+# enableCORS = false     # Cross-Origin Resource Sharing settings
+# enableXsrfProtection = true  # Security feature to prevent CSRF attacks
