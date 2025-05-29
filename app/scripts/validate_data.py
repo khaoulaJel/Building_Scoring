@@ -10,8 +10,8 @@ import streamlit as st
 from models.mahalanobis import classify_mahalanobis
 from models.pca import classify_pca
 from models.weighted import classify_weighted
-from models.bayesian import classify_bayesian
-from models.manhattan import classify_manhattan
+from models.tree_classifier import classify_robust_tree
+from models.cosine import classify_cosine
 from models.topsis import classify_topsis
 
 
@@ -67,11 +67,11 @@ def ensure_classifications(df, features, weights):
     is missing.  Returns df unchanged if everything is already there."""
     expected = {
         "class_euclidean",
-        "class_manhattan",
+        "class_cosine",
         "class_mahalanobis",
         "class_pca",
         "class_weighted",
-        "class_bayesian",
+        "class_tree",
         "class_topsis",
     }
     if expected.issubset(df.columns):
@@ -88,8 +88,8 @@ def add_classifications(
     features: List[str],
     weights: Optional[List[float]] = None,
 ) -> pd.DataFrame:
-    """Run *all* classifiers (Mahalanobis, PCA, Weighted, Bayesian,
-    Manhattan, TOPSIS) and append their `class_*` columns.
+    """Run *all* classifiers (Mahalanobis, PCA, Weighted, tree_classifier,
+    cosine, TOPSIS) and append their `class_*` columns.
     """
 
     if len(features) < 2:
@@ -122,24 +122,19 @@ def add_classifications(
         out["class_weighted"] = classify_weighted(out, features=features, weights=weights)["class_label"]
     except Exception as e:
         st.warning(f"Weighted failed: {e}")
-        out["class_weighted"] = "C"
-
-    # –– Bayesian ––
-    try:
-        bayes = classify_bayesian(out, features=features)
-        out["class_bayesian"] = bayes["class_label"]
-        if "Bayesian_Certainty" in bayes:
-            out["Bayesian_Certainty"] = bayes["Bayesian_Certainty"]
+        out["class_weighted"] = "C"    # –– tree_classifier ––    try:
+        tree = classify_robust_tree(out, numeric_features=features)  # Note: tree classifier uses numeric_features
+        out["class_tree"] = tree["class_tree"]
     except Exception as e:
-        st.warning(f"Bayesian failed: {e}")
-        out["class_bayesian"] = "C"
+        st.warning(f"tree classifier failed: {e}")
+        out["class_tree"] = "C"
 
-    # –– Manhattan ––
+    # –– cosine ––
     try:
-        out["class_manhattan"] = classify_manhattan(out, features=features)["class_label"]
+        out["class_cosine"] = classify_cosine(out, features=features)["class_label"]
     except Exception as e:
-        st.warning(f"Manhattan failed: {e}")
-        out["class_manhattan"] = "C"
+        st.warning(f"cosine failed: {e}")
+        out["class_cosine"] = "C"
 
     # –– TOPSIS ––
     try:
