@@ -5,7 +5,7 @@ Pre-compute building dataset for a single city.
 This script:
  1. Reads a raw DPE CSV
  2. Renames key columns and adds derived metrics (Water_Usage, log-transforms)
- 3. Runs classification algorithms (Mahalanobis, PCA, Weighted, Bayesian, Manhattan, TOPSIS)
+ 3. Runs classification algorithms (Mahalanobis, PCA, Weighted, tree_classifier, cosine, TOPSIS)
  4. Saves the enriched data to Parquet and overwrites the original CSV (with backup)
 
 Usage:
@@ -99,9 +99,9 @@ for col in log_targets:
 # ──────────────────────────────────────────────────────────────
 from app.models.weighted   import classify_weighted
 from app.models.pca        import classify_pca
-from app.models.bayesian   import classify_bayesian
+from app.models.tree_classifier   import classify_robust_tree
 from app.models.mahalanobis import classify_mahalanobis
-from app.models.manhattan  import classify_manhattan
+from app.models.cosine  import classify_cosine
 from app.models.topsis     import classify_topsis
 
 features = args.features
@@ -133,13 +133,13 @@ df['class_weighted'] = classify_weighted(
     df, features=features, weights=weights
 )['class_label']
 
-# Bayesian
-df['class_bayesian'] = classify_bayesian(
-    df, features=features
-)['class_label']
+# tree classifier
+df['class_tree'] = classify_robust_tree(
+    df, numeric_features=features
+)['class_tree']
 
-# Manhattan
-df['class_manhattan'] = classify_manhattan(
+# cosine
+df['class_cosine'] = classify_cosine(
     df, features=features
 )['class_label']
 

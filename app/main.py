@@ -5,14 +5,14 @@ from datetime import datetime
 import logging
 # Configure logging to suppress INFO messages from pgmpy
 logging.getLogger('pgmpy').setLevel(logging.WARNING)
-from data.dataprocessing import process_city_data
+from data.dataprocessing import process_city_data, process_city_with_years, process_uploaded_data
 pd.set_option("styler.render.max_elements", 500_000)  
 
 from models.mahalanobis import classify_mahalanobis
 from models.pca import classify_pca
 from models.weighted import classify_weighted
-from models.bayesian import classify_bayesian
-from models.manhattan import classify_manhattan
+from models.tree_classifier import classify_robust_tree
+from models.cosine import classify_cosine
 from scripts.validate_data import add_classifications, validate_and_preprocess_dataset, ensure_classifications
 from visualization.map import display_map
 from visualization.charts import display_relationship_plot, display_distribution_plot
@@ -34,15 +34,33 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+data_dir = Path("data")
 CITY_PATHS = {
-    "Lyon":   "data/reduced_lyon_buildings_all_years.csv",
-    "Gordes": "data/reduced_gordes_buildings_all_years.csv",
-    # add more cities here as needed
+    # e.g. filename reduced_Lyon_buildings_all_years.csv → "Lyon"
+    f.stem.replace("reduced_", "").replace("_buildings_all_years", ""): str(f)
+    for f in data_dir.glob("*_buildings_all_years.csv")
 }
+
 @st.cache_data
 def load_city_data(city_name):
-    df_city = pd.read_csv(CITY_PATHS[city_name])
-    return validate_and_preprocess_dataset(df_city, scoring_basis)
+    """Load a city dataset and ensure it has required columns"""
+    try:
+        df_city = pd.read_csv(CITY_PATHS[city_name])
+        if 'year' not in df_city.columns:
+            df_city['year'] = datetime.now().year
+        return df_city
+    except Exception as e:
+        st.error(f"Error loading dataset for {city_name}: {str(e)}")
+        return None
+
+def get_filtered_df(df, year=None):
+    """Get dataset filtered by year if specified"""
+    if df is None:
+        return None
+    if year is not None and 'year' in df.columns:
+        return df[df['year'] == year].copy()
+    return df.copy()
 
 # Load CSS from external file
 load_css("styles.css")
@@ -50,32 +68,33 @@ load_css("styles.css")
 # App header with gradient
 st.markdown('<div class="main-header"><h1 style="text-align: center;"> Building Analytics Dashboard</h1></div>', unsafe_allow_html=True)
 
-# Initialize session state for comparison
+# Initialize session state for comparison and data
 if 'comparison_buildings' not in st.session_state:
     st.session_state['comparison_buildings'] = []
-
+if 'current_df' not in st.session_state:
+    st.session_state['current_df'] = None
 
 # Sidebar configuration
 with st.sidebar:
     st.title("Dashboard Controls")
     st.header("📊 Dataset Selection")
-
-    # ── 0) Initialize session_state stores ──
-    if "cities" not in st.session_state:
-        st.session_state["cities"] = ["Lyon", "Gordes"]
-    if "uploaded_dfs" not in st.session_state:
-        st.session_state["uploaded_dfs"] = {}
-
-    # ── 1) Build selectbox choices ──
-    choices = st.session_state["cities"] + ["Upload Custom Dataset"]
+    
+    # Build selectbox choices from actual files
+    available_cities = list(CITY_PATHS.keys())
     dataset_option = st.selectbox(
         "Choose Dataset",
-        choices,
+        available_cities + ["Upload Custom Dataset"],
         key="dataset_option"
     )
 
+    # Initialize variables
+    df = None
+    selected_city = None
+    is_custom_data = False
+
     # ── 2) Handle upload branch ──
     if dataset_option == "Upload Custom Dataset":
+        is_custom_data = True
         uploaded_file = st.file_uploader(
             "Upload CSV file",
             type=["csv"],
@@ -87,58 +106,84 @@ with st.sidebar:
 
         # suggest a name (filename without extension)
         default_name = Path(uploaded_file.name).stem
-        custom_name = st.text_input(
+        city_name = st.text_input(
             "Name this dataset:",
             value=default_name,
             key="custom_dataset_name"
         )
 
-        with st.spinner("Processing uploaded dataset…"):
-            try:
-                df = process_city_data(
-                    city_name=custom_name,
-                    input_source=uploaded_file,
-                    year=None  # will preserve any existing 'year' column
-                )
+        if not city_name.strip():
+            st.warning("Please provide a name for your dataset.")
+            st.stop()
+
+        # Process the uploaded dataset
+        with st.spinner(f"Processing dataset for {city_name}..."):
+            try:                # First process the uploaded file
+                current_year = datetime.now().year
+                  # Process uploaded data
+                processed_df = process_uploaded_data(city_name, uploaded_file, current_year)
+                if processed_df is None:
+                    raise ValueError("Failed to process uploaded data - check file format")
+                
+                # Save for future processing
+                output_file = f"reduced_{city_name.lower()}_buildings.csv"
+                processed_df.to_csv(output_file, index=False)
+                
+                # Only generate future predictions if the data doesn't already have year information
+                if 'year' not in processed_df.columns or processed_df['year'].isna().all():
+                    print("Generating future predictions since no year data found...")
+                    city_data = process_city_with_years(
+                        city_name=city_name,
+                        input_filename=output_file,  # Use the saved file
+                        base_year=current_year,
+                        future_years=[current_year + 1]
+                    )
+                else:
+                    # Use the processed data as is since it already has year information
+                    city_data = processed_df
+                
+                if city_data is None:
+                    st.error("Could not process the uploaded dataset. Please check the format.")
+                    st.stop()
+                  # Save reference to processed dataset
+                output_path = data_dir / f"reduced_{city_name.lower()}_buildings_all_years.csv"
+                city_data.to_csv(output_path, index=False)
+                
+                # Update CITY_PATHS with the new dataset
+                CITY_PATHS[city_name] = str(output_path)
+                
+                # Use the full processed dataset
+                df = city_data
+                selected_city = city_name
+                st.success(f"Successfully processed and saved dataset for {city_name}!")
+                st.rerun()  # Refresh to update the city list
+                
             except Exception as e:
-                st.error(f"Could not process upload: {e}")
+                st.error(f"Error processing uploaded file: {str(e)}")
                 st.stop()
 
-        # store both name & DataFrame
-        if custom_name not in st.session_state["cities"]:
-            st.session_state["cities"].append(custom_name)
-        st.session_state["uploaded_dfs"][custom_name] = df
-
-        selected_city = custom_name
-
     else:
-        # ── 3) Non-upload branch: default or previously uploaded ──
-        if dataset_option in st.session_state["uploaded_dfs"]:
-            # a custom upload we did earlier
-            df = st.session_state["uploaded_dfs"][dataset_option]
+        # ── 3) Load selected dataset ──
+        with st.spinner(f"Loading {dataset_option} data…"):
+            df_all = load_city_data(dataset_option)
+            if df_all is None:
+                st.error(f"Could not load dataset for {dataset_option}")
+                st.stop()
+            
+            df = get_filtered_df(df_all, year=datetime.now().year)
+            if df is None or len(df) == 0:
+                # If no data for current year, take all data
+                df = df_all.copy()
             selected_city = dataset_option
 
-        elif dataset_option == "Lyon":
-            with st.spinner("Loading Lyon data…"):
-                df_all = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
-                df = df_all[df_all["year"] == datetime.now().year]
-            selected_city = "Lyon"
+    # Cache current state
+    st.session_state["current_df"] = df
+    st.session_state["selected_city"] = selected_city
+    st.session_state["is_custom_data"] = is_custom_data
 
-        elif dataset_option == "Gordes":
-            with st.spinner("Loading Gordes data…"):
-                try:
-                    df_all = pd.read_csv("data/reduced_gordes_buildings_all_years.csv")
-                except FileNotFoundError:
-                    st.error("Gordes dataset not found; loading Lyon instead.")
-                    df_all = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
-                df = df_all[df_all["year"] == datetime.now().year]
-            selected_city = "Gordes"
-
-        else:
-            # should never happen, but fallback
-            st.error(f"Unknown dataset option: {dataset_option}")
-            st.stop()
     st.write(f"Selected city: **{selected_city}**")  
+    st.write(f"Data type: {'Custom Upload' if is_custom_data else 'Built-in Dataset'}")
+    
     # Scoring basis
     st.subheader("Scoring Basis")
     scoring_basis = st.radio(
@@ -146,19 +191,46 @@ with st.sidebar:
         ["Total (kWh)", "Per m² (kWh/m²/year)"]
     )
 
-    # Validate and preprocess dataset
-    df = validate_and_preprocess_dataset(df, scoring_basis)
-    if df is None:
-        df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
-        selected_city = "Lyon"
-        st.warning("Invalid dataset. Reverted to default Lyon dataset")
+    # Validate and preprocess dataset - but don't revert for custom data
+    if is_custom_data:
+        # For custom data, do minimal validation to preserve the processed data
+        try:
+            # Just ensure we have the basic structure
+            if df is None or len(df) == 0:
+                st.error("Invalid custom dataset")
+                st.stop()
+            
+            # Check for essential columns
+            essential_cols = ['building_id', 'Energy_Consumption', 'CO2_Usage']
+            missing_cols = [col for col in essential_cols if col not in df.columns]
+            
+            if missing_cols:
+                st.error(f"Custom dataset is missing required columns: {missing_cols}")
+                st.stop()
+                
+        except Exception as e:
+            st.error(f"Error validating custom dataset: {e}")
+            st.stop()
+    
+    else:
+        # For built-in datasets, use full validation
         df = validate_and_preprocess_dataset(df, scoring_basis)
+        if df is None:
+            df = pd.read_csv("data/reduced_lyon_buildings_all_years.csv")
+            selected_city = "Lyon"
+            st.warning("Invalid dataset. Reverted to default Lyon dataset")
+            df = validate_and_preprocess_dataset(df, scoring_basis)
 
     # Replace metrics for intensity‐based scoring
     if scoring_basis == "Per m² (kWh/m²/year)":
         if "Energy_Intensity" in df.columns and "CO2_Intensity" in df.columns:
             df["Energy_Consumption"] = df["Energy_Intensity"]
             df["CO2_Usage"] = df["CO2_Intensity"]
+        else:
+            if is_custom_data:
+                st.warning("Custom dataset doesn't have intensity columns. Using total consumption values.")
+            else:
+                st.error("Intensity columns not found in dataset")
 
     st.subheader("Classification Features")
     available_features = [
@@ -166,12 +238,24 @@ with st.sidebar:
         "Energy_Intensity", "CO2_Intensity"
     ]
     available_features = [f for f in available_features if f in df.columns]
+    
+    if len(available_features) == 0:
+        st.error("No classification features found in dataset")
+        st.stop()
+
+    # Set default features based on what's available
+    default_features = []
+    if "Energy_Consumption" in available_features:
+        default_features.append("Energy_Consumption")
+    if "CO2_Usage" in available_features:
+        default_features.append("CO2_Usage")
+    if len(default_features) == 0:
+        default_features = available_features[:2]  # Take first 2 available
 
     selected_features = st.multiselect(
         "Select Features for Classification",
         options=available_features,
-        default=["Energy_Consumption", "CO2_Usage"],
-        # no max_selections → user can pick as many as they want
+        default=default_features,
         key="classification_features"
     )
 
@@ -180,20 +264,20 @@ with st.sidebar:
         st.error("Please select at least one feature for classification.")
         st.stop()
 
-
     # Cache in session state
-    st.session_state["df"]   = df
+    st.session_state["df"] = df
     st.session_state["city"] = selected_city
+    st.session_state["is_custom_data"] = is_custom_data
 
     # Classification method selection
     st.header("Analysis Method")
     classification_methods = {
-        "Manhattan Distance"    : "Manhattan Distance",
-        "Mahalanobis Distance"  : "Mahalanobis Distance",
-        "PCA Classification"    : "PCA Classification",
+        "cosine Distance": "cosine Distance",
+        "Mahalanobis Distance": "Mahalanobis Distance",
+        "PCA Classification": "PCA Classification",
         "Weighted Classification": "Weighted Classification",
-        "Bayesian Classification": "Bayesian Classification",
-        "Topsis"             : "Topsis",
+        "tree Classification": "tree Classification",
+        "Topsis": "Topsis",
     }
 
     classification_method = st.radio(
@@ -217,52 +301,71 @@ with st.sidebar:
                 key=f"weight_{feat}"
             )
             weights.append(w)
-        # Pass the user's list straight into add_classifications
+    
+    # Ensure classifications exist
     df = ensure_classifications(df, selected_features, weights)
-
         
     # Apply selected classification
     with st.spinner(f"Applying {classification_method}..."):
         class_column_mapping = {
-            "Manhattan Distance": "class_manhattan",
+            "cosine Distance": "class_cosine",
             "Mahalanobis Distance": "class_mahalanobis",
             "PCA Classification": "class_pca",
             "Weighted Classification": "class_weighted",
-            "Bayesian Classification": "class_bayesian",
+            "tree Classification": "class_tree",
             "Topsis": "class_topsis"
         }
         selected_class_column = class_column_mapping[classification_method]
-        
+        from sklearn.preprocessing import MinMaxScaler
+
+        # Compute optimal point
+        optimal_point = df[selected_features].min().values
+        scaler = MinMaxScaler()
+        X_scaled = scaler.fit_transform(df[selected_features])
+        optimal_scaled = scaler.transform([optimal_point])[0]
+
+        # Euclidean distances
+        distances = np.linalg.norm(X_scaled - optimal_scaled, axis=1)
+
+        # Bin distances into labels A–F
+        df['class_label'] = pd.qcut(distances, q=6, labels=['A', 'B', 'C', 'D', 'E', 'F'])
+
         # Apply the selected classification method
-        if classification_method == "Manhattan Distance":
-            from models.manhattan import classify_manhattan
-            df = classify_manhattan(df, features=selected_features)
-        elif classification_method == "Mahalanobis Distance":
-            from models.mahalanobis import classify_mahalanobis
-            df = classify_mahalanobis(df, features=selected_features, return_distance=True)
-        elif classification_method == "PCA Classification":
-            from models.pca import classify_pca
-            df = classify_pca(df, features=selected_features)
-        elif classification_method == "Weighted Classification":
-            from models.weighted import classify_weighted
-            df = classify_weighted(df, features=selected_features, weights=weights)
-        elif classification_method == "Bayesian Classification":
-            from models.bayesian import classify_bayesian
-            df = classify_bayesian(df, features=selected_features)
-        elif classification_method == "Topsis":
-            from models.topsis import classify_topsis
-            df = classify_topsis(df, features=selected_features, weights=weights)
-        
-        # Assign class_label from the mapped column
-        if selected_class_column in df.columns:
-            df["class_label"] = df[selected_class_column]
-        else:
-            st.error(f"Column '{selected_class_column}' not found after classification. Check the classification function.")
-            st.stop()
+        try:
+            if classification_method == "cosine Distance":
+                from models.cosine import classify_cosine
+                df = classify_cosine(df, features=selected_features)
+            elif classification_method == "Mahalanobis Distance":
+                from models.mahalanobis import classify_mahalanobis
+                df = classify_mahalanobis(df, features=selected_features, return_distance=True)
+            elif classification_method == "PCA Classification":
+                from models.pca import classify_pca
+                df = classify_pca(df, features=selected_features)
+            elif classification_method == "Weighted Classification":
+                from models.weighted import classify_weighted
+                df = classify_weighted(df, features=selected_features, weights=weights)
+            elif classification_method == "tree Classification":
+                from models.tree_classifier import classify_robust_tree
+                df = classify_robust_tree(df, numeric_features=selected_features)
+            elif classification_method == "Topsis":
+                from models.topsis import classify_topsis
+                df = classify_topsis(df, features=selected_features, weights=weights)
+            
+            # Assign class_label from the mapped column
+            if selected_class_column in df.columns:
+                df["class_label"] = df[selected_class_column]
+            else:
+                st.warning(f"Column '{selected_class_column}' not found after classification. Using default classification.")
+                # Keep the existing class_label from qcut
+                
+        except Exception as e:
+            st.error(f"Error applying {classification_method}: {e}")
+            if is_custom_data:
+                st.info("This might be due to custom data format. Try a different classification method.")
+            # Keep the default class_label from qcut
         
         # Cache updated DataFrame
         st.session_state["df"] = df
-        
 
 # Check if empty
 if df.empty:
@@ -600,10 +703,10 @@ with tab5:
     # 1) Pick method & class
     methods = {
         "PCA"        : "class_pca",
-        "Manhattan"  : "class_manhattan",
+        "cosine"  : "class_cosine",
         "Mahalanobis": "class_mahalanobis",
         "Weighted"   : "class_weighted",
-        "Bayesian"   : "class_bayesian",
+        "tree"   : "class_tree",
         "Topsis"     : "class_topsis",
     }
     method_name = st.selectbox("Classification Method", list(methods))
@@ -721,10 +824,10 @@ with tab6:
     df_all = ensure_classifications(df_all, selected_features, weights)
 
     # 4) Re-apply classification method across all years
-    if classification_method == "Manhattan Distance":
-        from models.manhattan import classify_manhattan
-        df_all = classify_manhattan(df_all, features=selected_features)
-        col = "class_manhattan"
+    if classification_method == "cosine Distance":
+        from models.cosine import classify_cosine
+        df_all = classify_cosine(df_all, features=selected_features)
+        col = "class_cosine"
     elif classification_method == "Mahalanobis Distance":
         from models.mahalanobis import classify_mahalanobis
         df_all = classify_mahalanobis(df_all, features=selected_features, return_distance=True)
@@ -741,10 +844,23 @@ with tab6:
         from models.topsis import classify_topsis
         df_all = classify_topsis(df_all, features=selected_features, weights=weights)
         col = "class_topsis"
-    else:  # Bayesian
-        from models.bayesian import classify_bayesian
-        df_all = classify_bayesian(df_all, features=selected_features)
-        col = "class_bayesian"
+    else:  # tree
+        from sklearn.preprocessing import MinMaxScaler
+        import numpy as np
+
+        # Ensure df_all has class_label
+        if 'class_label' not in df_all.columns:
+            optimal_point = df_all[selected_features].min().values
+            scaler = MinMaxScaler()
+            X_scaled = scaler.fit_transform(df_all[selected_features])
+            optimal_scaled = scaler.transform([optimal_point])[0]
+            distances = np.linalg.norm(X_scaled - optimal_scaled, axis=1)
+            
+            df_all['class_label'] = pd.qcut(distances, q=6, labels=['A', 'B', 'C', 'D', 'E', 'F'])
+
+        from models.tree_classifier  import classify_robust_tree
+        df_all = classify_robust_tree(df_all, numeric_features=selected_features)
+        col = "class_tree"
     df_all["class_label"] = df_all[col]
 
     # 5) Counts by class & year
@@ -884,19 +1000,19 @@ with tab7:
     sel_class = st.selectbox("Filter by Energy Class (optional)", ["All"] + list("ABCDEF"))
 
     methods = {
-        "Manhattan":   lambda d: classify_manhattan(d, features=selected_features),
+        "cosine":   lambda d: classify_cosine(d, features=selected_features),
         "Mahalanobis": lambda d: classify_mahalanobis(d, features=selected_features, return_distance=True),
         "PCA":         lambda d: classify_pca(d, features=selected_features),
         "Weighted":    lambda d: classify_weighted(d, features=selected_features, weights=weights),
-        "Bayesian":    lambda d: classify_bayesian(d, features=selected_features),
+        "tree":    lambda d: classify_robust_tree(d, numeric_features=selected_features),
         "Topsis":     lambda d: classify_topsis(d, features=selected_features, weights=weights)
     }
     cols_map = {
-        "Manhattan":   "class_manhattan",
+        "cosine":   "class_cosine",
         "Mahalanobis": "class_mahalanobis",
         "PCA":         "class_pca",
         "Weighted":    "class_weighted",
-        "Bayesian":    "class_bayesian",
+        "tree":    "class_tree",
         "Topsis":     "class_topsis"
     }
     sel_method = st.selectbox("Classification Method", list(methods.keys()))
@@ -1144,6 +1260,6 @@ with tab7:
     
 st.markdown("""
     <div style="text-align: center; margin-top: 30px; padding: 10px; background-color: #f8f9fa; border-radius: 5px;">
-        <p style="margin: 0; color: #1a1a1a;">Building Analytics Dashboard • Created with ❤️ • Data updated: April 2025</p>
+        <p style="margin: 0; color: #1a1a1a;">Building Analytics Dashboard • Created with ❤️ • Data updated: Mai 2025</p>
     </div>
 """, unsafe_allow_html=True)

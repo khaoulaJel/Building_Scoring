@@ -102,11 +102,14 @@ def display_building_classifications(
         "F": "#c0392b"
     }
 
-    class_cols = [
-    c for c in df.columns
-    if c.startswith("class_")
-    and c != "class_label"
-]
+    # Find all classification columns including tree classifier
+    class_cols = []
+    for c in df.columns:
+        if c.startswith("class_") and c != "class_label":
+            # Skip columns that represent the same classification
+            if c == "class_tree_classifier" and "class_tree" in df.columns:
+                continue
+            class_cols.append(c)
 
     methods = [
         (col.replace("class_", "").title(), bd[col])
